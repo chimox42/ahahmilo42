@@ -578,7 +578,7 @@ body.restore-lock-active button,body.restore-lock-active input[type="file"],body
   <div class="subpage" id="pred-sub-KMB"></div>
 </div>
 
-<!-- ============ PRED V2 (2026-08-28 -- Candidate Extension: tampilan identik PRED,
+<!-- ============ PRED V2 (2026-08-27 -- Batch 2: tampilan identik PRED,
      mesin skor beda -- scoreCandidatesBatch2, per-posisi joint
      probability. KMB TIDAK di-clone di sini, lihat catatan blueprint) ============ -->
 <div class="page" id="page-predv2">
@@ -1675,33 +1675,6 @@ function renderHarianPredBox(sessKey){
 let harianLogPage=0;
 const HARIAN_LOG_PAGE_SIZE=20;
 function harianLogGoPage(p){harianLogPage=p;renderHarianLog();}
-// Cek apakah result aktual sebuah entri rawLog cocok dgn kandidat PRED tab
-// HARIAN (cand4/cand3/cand2/kembar dari computeSlotPredLocal). Prioritas
-// pakai predSnapshot yg sudah tersimpan persis di entri itu (arsip asli
-// saat SIMPAN ditekan); kalau entri lama belum punya snapshot (raw ada tapi
-// snapshot belum tercatat), recompute walk-forward pakai raw+tanggal entri
-// itu sendiri -- sama prinsipnya dgn panel RIWAYAT LENGKAP SEBELUMNYA di
-// tab PRED (dihitung ulang pakai engine sekarang, bukan reject begitu saja).
-function _harianLogHitInfo(r){
-  if(!r.result||r.result==='ZONK'||!r.raw||r.raw.length!==8)return null;
-  let snap=r.predSnapshot;
-  if(!snap||(!snap.cand4&&!snap.cand3&&!snap.cand2)){
-    try{const p=computeSlotPredLocal(r.raw,r.date);snap={cand4:p.cand4,cand3:p.cand3,cand2:p.cand2,kembar:p.kembar};}
-    catch(e){return null;}
-  }
-  const val=r.result;
-  const L=val.length;
-  const listKey=L===4?'cand4':L===3?'cand3':L===2?'cand2':null;
-  if(listKey&&snap[listKey]){
-    const idx=snap[listKey].findIndex(c=>c.letters===val);
-    if(idx>=0)return{hit:true,rank:idx+1};
-  }
-  if(snap.kembar&&snap.kembar.length){
-    const idx=snap.kembar.findIndex(k=>k.letters===val);
-    if(idx>=0)return{hit:true,rank:idx+1,kembar:true};
-  }
-  return{hit:false};
-}
 function renderHarianLog(){
   const el=$id('harianLogList');if(!el)return;
   const pagerEl=$id('harianLogPager');
@@ -1742,14 +1715,11 @@ function renderHarianLog(){
     const origIdx=rawLog.indexOf(r);
     const canJejak=r.raw&&r.raw.length===8&&r.result&&r.result!=='ZONK';
     const jejakBtn=canJejak?`<button onclick="toggleJejakPola(${origIdx})" style="background:none;border:1px solid var(--dim2);color:var(--purple);font-size:7px;letter-spacing:0.5px;border-radius:4px;padding:1px 5px;cursor:pointer;flex-shrink:0" title="Analisa raw & result vs kandidat engine">▸ Jejak Pola</button>`:'';
-    const hitInfo=_harianLogHitInfo(r);
-    const hitBadge=hitInfo?(hitInfo.hit?`<span style="color:var(--green);font-weight:700;white-space:nowrap">🏆 JP${hitInfo.kembar?' (kembar)':''} #${hitInfo.rank}</span>`:`<span style="color:var(--red);white-space:nowrap">💀 ZONK</span>`):'';
     return `<div style="display:flex;flex-direction:column;gap:2px;font-size:9px;padding:6px 8px;background:var(--panel2);border-radius:6px;margin-bottom:4px;border-left:3px solid ${color}">
       <div style="display:flex;justify-content:space-between;gap:6px;overflow-x:auto">
         <span style="color:var(--dim);white-space:nowrap">${r.ts} · ${r.session} · slot${r.slot||1}</span>
         <span style="color:#fff;letter-spacing:1px;white-space:nowrap">${r.raw||'-'}</span>
         <span style="color:${color};font-weight:700;white-space:nowrap">${r.result||'-'}</span>
-        ${hitBadge}
         ${crossTag}
         <span style="color:var(--dim);white-space:nowrap">${applied}</span>
         <button onclick="deleteHarianLogEntry(${origIdx})" style="background:none;border:none;color:var(--red);font-size:11px;cursor:pointer;padding:0 2px;flex-shrink:0" title="Hapus entri ini">🗑</button>
@@ -2478,19 +2448,8 @@ function _histUpsertPending(nKey,ps){
 function _histUpsertPendingV2(nKey,ps){
   const arr=histStateV2[nKey];
   if(!arr||!ps||!ps.candidates||!ps.candidates.length)return;
-  const idx=arr.findIndex(h=>h.date===ps.date&&h.result===null&&!h.legacy);
-  const entry={
-    date:ps.date,
-    candidates:[...ps.candidates],
-    v1Candidates:[...(ps.v1Candidates||[])],
-    rawContext:ps.rawContext||null,
-    result:null,
-    jp:null,
-    v1Hit:null,
-    v1HitIdx:null,
-    additionalHit:null,
-    engineVersion:PRED_V2_ENGINE_VERSION
-  };
+  const idx=arr.findIndex(h=>h.date===ps.date&&h.result===null);
+  const entry={date:ps.date,candidates:[...ps.candidates],result:null,jp:null,engineVersion:'batch2'};
   if(idx>=0)arr[idx]=entry;else arr.push(entry);
   saveHistStateV2(nKey);
 }
@@ -2535,10 +2494,6 @@ function _actualEntriesForDateKmb(dateISO){
 // aman dipanggil berkali-kali/dari subtab manapun tanpa dobel-catat.
 let backfillDone=(function(){try{const s=lsGet('tah2_backfill_done');return s?JSON.parse(s):[];}catch(e){return[];}})();
 function saveBackfillDone(){try{lsSet('tah2_backfill_done',JSON.stringify(backfillDone));try{AHSyncEngine.markPendingExtended();}catch(e2){}}catch(e){}}
-// Backfill PRED V2 (Candidate Extension) -- set idempoten TERPISAH dari V1,
-// biar reset/ubah salah satu backfill tidak saling pengaruh.
-let backfillDoneV2=(function(){try{const s=lsGet('tah2_backfillv2_done');return s?JSON.parse(s):[];}catch(e){return[];}})();
-function saveBackfillDoneV2(){try{lsSet('tah2_backfillv2_done',JSON.stringify(backfillDoneV2));try{AHSyncEngine.markPendingExtended();}catch(e2){}}catch(e){}}
 function runFullBackfill(){
   const today=todayStr();
   const doneSet=new Set(backfillDone);
@@ -2597,69 +2552,6 @@ function handleRunFullBackfill(btnId){
     setTimeout(()=>{btn.textContent=orig;},3000);
   }
 }
-
-// ============================================================
-// BACKFILL PRED V2 (Candidate Extension) — clone konsep dari runFullBackfill
-// V1: ambil semua raw+result historis di rawLog (tanggal < hari ini),
-// hitung kandidat "as of" tanggal itu pakai engine V2 (_predV2CandidateBundle,
-// engine SEKARANG -- bukan snapshot lama), cocokkan ke result, catat
-// permanen ke histStateV2 satu entri per SESI/SLOT (sama granularitas
-// V1, bukan per tanggal). Idempoten lewat backfillDoneV2 (set terpisah
-// dari V1). KMB sengaja di-skip (scope V2 memang tidak meng-clone KMB).
-// Tidak memanggil _recordEngineAudit (di luar domain Audit Oracle, sama
-// prinsip dgn fungsi V2 lainnya).
-// ============================================================
-function runFullBackfillV2(){
-  const today=todayStr();
-  const doneSet=new Set(backfillDoneV2);
-  let added=0;
-  rawLog.forEach(r=>{
-    if(!r.date||r.date>=today||!r.result)return; // hanya data LAMPAU yg result-nya sudah pasti
-    [2,3,4].forEach(n=>{
-      if(!r.appliedTo||!r.appliedTo.includes(n))return;
-      const key='n'+n+'|'+r.date+'|'+r.session+'|'+r.slot;
-      if(doneSet.has(key))return;
-      const L=r.result.length;
-      let v=null;
-      if(L===4){if(n===4)v=r.result;else if(n===3)v=r.result.slice(1);else if(n===2)v=r.result.slice(2);}
-      else if(L===3){if(n===3)v=r.result;else if(n===2)v=r.result.slice(1);}
-      else if(L===2&&n===2)v=r.result;
-      if(!v)return;
-      const bundle=_predV2CandidateBundle(n,r.date,PRED_V2_TARGET);
-      const candidates=bundle.candidates;
-      const hitIdx=candidates.indexOf(v);
-      const isJp=hitIdx>=0;
-      const v1HitIdx=(bundle.v1Candidates||[]).indexOf(v);
-      const v1Hit=v1HitIdx>=0;
-      const additionalHit=isJp&&!v1Hit;
-      histStateV2[n].push({
-        date:r.date,
-        candidates,
-        v1Candidates:[...(bundle.v1Candidates||[])],
-        result:v,
-        jp:isJp,
-        v1Hit,v1HitIdx,additionalHit,
-        session:r.session,slot:r.slot,
-        engineVersion:PRED_V2_ENGINE_VERSION
-      });
-      doneSet.add(key);added++;
-    });
-  });
-  backfillDoneV2=[...doneSet];
-  saveBackfillDoneV2();
-  saveHistStateV2(2);saveHistStateV2(3);saveHistStateV2(4);
-  renderPredV2(2);renderPredV2(3);renderPredV2(4);
-  return added;
-}
-function handleRunFullBackfillV2(btnId){
-  const added=runFullBackfillV2();
-  const btn=$id(btnId);
-  if(btn){
-    const orig=btn.textContent;
-    btn.textContent=added>0?`✓ ${added} riwayat baru ditambahkan`:'✓ Sudah lengkap, tidak ada yang baru';
-    setTimeout(()=>{btn.textContent=orig;},3000);
-  }
-}
 function savePredState(n){try{lsSet('tah2_pred_'+n,JSON.stringify(predState[n]));try{AHSyncEngine.markPendingExtended();}catch(e2){}}catch(e){}
   try{if(typeof SBData!=='undefined'&&SBData.replacePredState)SBData.replacePredState(n,predState[n]).catch(()=>{});}catch(e3){}}
 
@@ -2672,48 +2564,25 @@ function saveHistState(n){try{lsSet('tah2_hist_'+n,JSON.stringify(histState[n]))
   try{if(typeof SBData!=='undefined'&&SBData.replaceHistState)SBData.replaceHistState(n,histState[n]).catch(()=>{});}catch(e3){}}
 
 // ============================================================
-// PRED V2 — load/save state (Candidate Extension Engine)
-// Namespace terpisah total dari PRED V1.
-// Batch-2 lama tetap dipertahankan sebagai legacy dan TIDAK dicampur
-// ke histori/akurasi engine V2 baru.
+// BATCH 2 — load/save predState/histState (namespace key BEDA:
+// tah2_predv2_*/tah2_histv2_*, TIDAK menyentuh key Batch 1 sama sekali).
+// Sengaja TIDAK memanggil SBData.replacePredState/replaceHistState (itu
+// menulis ke tabel Supabase yg sama persis dipakai Batch 1, dikunci per
+// `n` saja tanpa pembeda batch -- kalau dipanggil di sini bisa menimpa
+// data Batch 1 di server). Untuk saat ini Batch 2 tersimpan localStorage
+// saja (markPendingExtended tetap dipanggil, pola sama seperti
+// predSlotLog, supaya konsisten dgn mekanisme dirty-flag yang ada).
 // ============================================================
 function loadPredStateV2(n){
-  try{
-    const s=lsGet('tah2_predv2_'+n);
-    if(s){
-      const parsed=JSON.parse(s);
-      // State Batch-2 lama tidak dipakai oleh engine baru.
-      // Tidak dihapus; hanya diisolasi agar eksperimen baru dimulai bersih.
-      if(parsed.engineVersion!==PRED_V2_ENGINE_VERSION){
-        return{date:null,candidates:[],candidateSources:[],status:[],result:null,results:[],v1Candidates:[],engineVersion:PRED_V2_ENGINE_VERSION};
-      }
-      if(!Array.isArray(parsed.results))parsed.results=[];
-      if(!Array.isArray(parsed.v1Candidates))parsed.v1Candidates=[];
-      return parsed;
-    }
-  }catch(e){}
-  return{date:null,candidates:[],candidateSources:[],status:[],result:null,results:[],v1Candidates:[],engineVersion:PRED_V2_ENGINE_VERSION};
+  try{const s=lsGet('tah2_predv2_'+n);if(s){const parsed=JSON.parse(s);if(!Array.isArray(parsed.results))parsed.results=[];return parsed;}}catch(e){}
+  return{date:null,candidates:[],status:[],result:null,results:[]};
 }
-function savePredStateV2(n){
-  try{lsSet('tah2_predv2_'+n,JSON.stringify(predStateV2[n]));try{AHSyncEngine.markPendingExtended();}catch(e2){}}catch(e){}
-}
+function savePredStateV2(n){try{lsSet('tah2_predv2_'+n,JSON.stringify(predStateV2[n]));try{AHSyncEngine.markPendingExtended();}catch(e2){}}catch(e){}}
 function loadHistStateV2(n){
-  try{
-    const s=lsGet('tah2_histv2_'+n);
-    if(s){
-      const arr=JSON.parse(s);
-      return Array.isArray(arr)
-        ?arr.map(h=>h&&h.engineVersion==='batch2'
-          ?{...h,legacy:true,engineVersion:'legacy-batch2'}
-          :h)
-        :[];
-    }
-  }catch(e){}
+  try{const s=lsGet('tah2_histv2_'+n);if(s)return JSON.parse(s);}catch(e){}
   return[];
 }
-function saveHistStateV2(n){
-  try{lsSet('tah2_histv2_'+n,JSON.stringify(histStateV2[n]));try{AHSyncEngine.markPendingExtended();}catch(e2){}}catch(e){}
-}
+function saveHistStateV2(n){try{lsSet('tah2_histv2_'+n,JSON.stringify(histStateV2[n]));try{AHSyncEngine.markPendingExtended();}catch(e2){}}catch(e){}}
 
 // ============================================================
 // LOG AUDIT ENGINE OTOMATIS (domain baru — Sprint Ekspansi Sync)
@@ -4018,137 +3887,114 @@ function scoreCandidatesCombinedAsOf(n,topN,asOfDateISO){
 }
 
 // ============================================================
-// PRED V2 — CANDIDATE EXTENSION ENGINE (Blueprint 2026-08)
-// ------------------------------------------------------------
-// V1 adalah baseline READ-ONLY.
-// V2 mempunyai orchestrator/engine pipeline sendiri, menggunakan
-// primitive scoring yang identik dengan V1, tetapi menjalankan
-// perhitungan sendiri dan state sendiri.
-// Setelah ranking dasar dibuat, V2 hanya mengambil kandidat yang
-// belum ter-cover oleh final candidate coverage V1.
+// BATCH 2 — MESIN SKOR ALTERNATIF (2026-08-27, permintaan user: "buat
+// batch 2, cara hitung dan susunan berbeda dari batch 1"). Filosofi
+// beda total dari scoreCandidatesCombined (yg menilai 1 kombo SEBAGAI
+// SATU KESATUAN lewat 7 sinyal V2 + 6 sinyal V3, digabung rata-rata
+// rank 2 mesin):
 //
-// TIDAK:
-// - memanggil generatePred() V1
-// - menulis predState/histState V1
-// - memutasi kandidat V1
-// - membuat formula prediksi baru
-// - permutation farming
+// Batch 2 menilai SETIAP POSISI SECARA INDEPENDEN lalu mengalikan
+// probabilitasnya (joint probability, gaya Naive Bayes) -- bukan
+// menilai kombo sbg gestalt. Dua komponen per posisi:
+//  1) FREKUENSI per-posisi dgn decay eksponensial halus (bukan bucket
+//     kasar 10/20/50 spt V3) + Laplace smoothing (huruf yg belum
+//     pernah muncul di posisi itu tetap dapat probabilitas kecil,
+//     bukan nol mati)
+//  2) TRANSISI per-posisi orde-1 (huruf posisi ke-i draw sebelumnya ->
+//     huruf posisi ke-i draw ini) -- Markov PER POSISI, beda dari
+//     Markov Batch 1 yg berbasis kombo-penuh
+// Skor akhir = jumlah log-probabilitas (spy tidak underflow, setara
+// perkalian probabilitas asli) dari kedua komponen di semua posisi.
+// SATU metode tunggal (bukan ensemble 2 mesin spt Batch 1) -- lebih
+// murah dihitung & independen secara matematis dari Batch 1, supaya
+// keduanya bisa jadi pembanding riil (bukan variasi kecil dari hal yg
+// sama).
 // ============================================================
-const PRED_V2_ENGINE_VERSION='candidate-extension-v1';
-const PRED_V2_TARGET=15;
-
-function _predV2CanonicalKey(cand){
-  return typeof cand==='string'?[...cand].sort().join(''):'';
+const B2_DECAY_HALFLIFE=12; // bobot draw turun separuh tiap 12 putaran mundur
+const B2_LAPLACE_ALPHA=1;
+const B2_W_FREQ=0.6,B2_W_TRANS=0.4;
+function _b2Weight(totalLen,idx){
+  const distFromEnd=totalLen-1-idx; // 0 = draw paling baru
+  return Math.pow(0.5,distFromEnd/B2_DECAY_HALFLIFE);
 }
+function scoreCandidatesBatch2FromData(n,data,topN){
+  const total=data.length;
+  const used=new Set(data);
+  const candidates=ALL[n].filter(p=>!used.has(p));
+  if(!candidates.length)return[];
 
-// Engine scoring V2 independen: primitive scoring tetap identik dengan
-// basis V1, tetapi orchestrator dan eksekusinya berdiri sendiri.
-// Tidak memakai output/state generatePred() V1.
-function _scorePredV2IndependentFromState(n,topN){
-  const v2=_scorePredV2Detailed(n,ALL[n].length,false).map(s=>({cand:s.cand,score:s.score*100}));
-  const v3=_scorePredV2V3(n,ALL[n].length).map(s=>({cand:s.cand,score:s.score*100}));
-  const v2Rank={},v3Rank={},v2Score={},v3Score={};
-  v2.forEach((s,i)=>{v2Rank[s.cand]=i+1;v2Score[s.cand]=s.score;});
-  v3.forEach((s,i)=>{v3Rank[s.cand]=i+1;v3Score[s.cand]=s.score;});
-  const allCands=new Set([...v2.map(s=>s.cand),...v3.map(s=>s.cand)]);
-  const poolV2=v2.length,poolV3=v3.length;
-  const combined=[...allCands].map(cand=>{
-    const normRanks=[];
-    if(v2Rank[cand]!=null)normRanks.push(poolV2>1?(v2Rank[cand]-1)/(poolV2-1):0);
-    if(v3Rank[cand]!=null)normRanks.push(poolV3>1?(v3Rank[cand]-1)/(poolV3-1):0);
-    return{
-      cand,
-      v2:v2Score[cand]||0,
-      v3:v3Score[cand]||0,
-      score:((v2Score[cand]||0)+(v3Score[cand]||0))/2,
-      rankSum:normRanks.reduce((a,b)=>a+b,0)/normRanks.length
-    };
+  // 1) Distribusi probabilitas huruf PER POSISI
+  const posWeight=Array.from({length:n},()=>({}));
+  let totalWeight=0;
+  data.forEach((combo,i)=>{
+    const w=_b2Weight(total,i);
+    totalWeight+=w;
+    for(let pos=0;pos<n;pos++){
+      const ch=combo[pos];
+      posWeight[pos][ch]=(posWeight[pos][ch]||0)+w;
+    }
   });
-  combined.sort((a,b)=>a.rankSum-b.rankSum);
-  return combined.slice(0,topN);
-}
+  const posProb=posWeight.map(wObj=>{
+    const denom=totalWeight+B2_LAPLACE_ALPHA*LETTERS.length;
+    const prob={};
+    LETTERS.forEach(l=>{prob[l]=((wObj[l]||0)+B2_LAPLACE_ALPHA)/denom;});
+    return prob;
+  });
 
-// Adapter V2 ke primitive scoring yang sudah ada. Nama baru membuat
-// ownership pipeline V2 eksplisit; primitive-nya tetap identik dengan V1.
-function _scorePredV2Detailed(n,topN,asOf){
-  return scoreCandidatesDetailed(n,topN,asOf);
-}
-function _scorePredV2V3(n,topN){
-  return scoreCandidatesV3(n,topN);
-}
-
-// Snapshot ranking V2 yang immutable terhadap state V1.
-// Untuk backdate, hanya data sampai tanggal tersebut yang dipakai.
-function _scorePredV2BaseEngine(n,topN,asOfDateISO){
-  if(!asOfDateISO)return _scorePredV2IndependentFromState(n,topN);
-  const original=state[n];
-  const filtered=original.filter(item=>!item||typeof item!=='object'||!item.d||item.d<=asOfDateISO);
-  state[n]=filtered;
-  try{
-    return _scorePredV2IndependentFromState(n,topN);
-  }finally{
-    state[n]=original;
+  // 2) Matriks transisi PER POSISI orde-1 (huruf posisi i draw sebelumnya -> draw ini)
+  const posTransWeight=Array.from({length:n},()=>({}));
+  for(let i=1;i<total;i++){
+    const w=_b2Weight(total,i);
+    const prevCombo=data[i-1],curCombo=data[i];
+    for(let pos=0;pos<n;pos++){
+      const prevCh=prevCombo[pos],curCh=curCombo[pos];
+      if(!posTransWeight[pos][prevCh])posTransWeight[pos][prevCh]={};
+      posTransWeight[pos][prevCh][curCh]=(posTransWeight[pos][prevCh][curCh]||0)+w;
+    }
   }
-}
-
-// Snapshot candidate coverage final V1 tanpa memanggil generatePred().
-// Orchestration kandidat mengikuti mekanisme final V1.
-function _predV2GetV1CandidatesFromRanked(fullRanked,n,asOfDateISO){
-  const diversified=diversifyCandidates(fullRanked,PRED_RESULT_LIMIT+5);
-  const tagged=injectPositionalCandidates(fullRanked,diversified,n,asOfDateISO);
-  return [...new Set(tagged.map(s=>s.cand))].slice(0,PRED_RESULT_LIMIT);
-}
-
-// Extension gate: exact duplicate + structural family redundancy.
-// Kandidat V2 tidak boleh sekadar variasi susunan kandidat V1.
-function _predV2ExtensionFromRanked(ranked,v1Candidates,target){
-  target=target||PRED_V2_TARGET;
-  const blockedExact=new Set(v1Candidates||[]);
-  const blockedFamilies=new Set((v1Candidates||[]).map(_predV2CanonicalKey));
-  const selected=[];
-  const selectedFamilies=new Set();
-
-  for(const item of (ranked||[])){
-    if(!item||!item.cand)continue;
-    const cand=item.cand;
-    const family=_predV2CanonicalKey(cand);
-    if(blockedExact.has(cand))continue;
-    if(blockedFamilies.has(family))continue;
-    if(selectedFamilies.has(family))continue;
-
-    selected.push({...item,source:'extension'});
-    selectedFamilies.add(family);
-    if(selected.length>=target)break;
+  const lastCombo=total>0?data[total-1]:null;
+  const posTransProb=[];
+  for(let pos=0;pos<n;pos++){
+    if(lastCombo){
+      const prevCh=lastCombo[pos];
+      const row=posTransWeight[pos][prevCh]||{};
+      const rowTotal=Object.values(row).reduce((a,b)=>a+b,0);
+      const denom=rowTotal+B2_LAPLACE_ALPHA*LETTERS.length;
+      const prob={};
+      LETTERS.forEach(l=>{prob[l]=((row[l]||0)+B2_LAPLACE_ALPHA)/denom;});
+      posTransProb.push(prob);
+    }else posTransProb.push(null);
   }
-  return selected;
+
+  // 3) Skor = sum-of-log (setara perkalian probabilitas) freq+transisi tiap posisi
+  const scored=candidates.map(p=>{
+    let logScore=0;
+    for(let pos=0;pos<n;pos++){
+      const ch=p[pos];
+      const fProb=posProb[pos][ch]||1e-6;
+      logScore+=B2_W_FREQ*Math.log(fProb);
+      const tProb=posTransProb[pos]?(posTransProb[pos][ch]||1e-6):fProb;
+      logScore+=B2_W_TRANS*Math.log(tProb);
+    }
+    return{cand:p,score:logScore};
+  });
+  scored.sort((a,b)=>b.score-a.score);
+  return scored.slice(0,topN);
 }
-
-function _predV2CandidateBundle(n,asOfDateISO,target){
-  const ranked=_scorePredV2BaseEngine(n,ALL[n].length,asOfDateISO);
-  const v1Candidates=_predV2GetV1CandidatesFromRanked(ranked,n,asOfDateISO);
-  const selected=_predV2ExtensionFromRanked(ranked,v1Candidates,target||PRED_V2_TARGET);
-
-  return{
-    candidates:selected.map(s=>s.cand),
-    candidateSources:selected.map(s=>s.source||'extension'),
-    scores:selected.map(s=>s.score),
-    v1Candidates,
-    engineVersion:PRED_V2_ENGINE_VERSION
-  };
-}
-
-// Compatibility aliases: jalur UI/per-slot lama tetap hidup, tetapi sekarang
-// seluruhnya diarahkan ke Candidate Extension Engine baru.
 function scoreCandidatesBatch2(n,topN){
-  const b=_predV2CandidateBundle(n,null,topN||PRED_V2_TARGET);
-  return b.candidates.map((cand,i)=>({cand,score:b.scores[i],source:b.candidateSources[i]}));
+  return scoreCandidatesBatch2FromData(n,vals(state[n]),topN);
 }
 function scoreCandidatesBatch2AsOf(n,topN,asOfDateISO){
-  const b=_predV2CandidateBundle(n,asOfDateISO,topN||PRED_V2_TARGET);
-  return b.candidates.map((cand,i)=>({cand,score:b.scores[i],source:b.candidateSources[i]}));
+  if(!asOfDateISO)return scoreCandidatesBatch2(n,topN);
+  const filtered=state[n].filter(item=>!item||typeof item!=='object'||!item.d||item.d<=asOfDateISO);
+  return scoreCandidatesBatch2FromData(n,vals(filtered),topN);
 }
 
-// Proyeksi kandidat huruf ke angka konkret menggunakan RAW 8-digit AH.
+// Proyeksi kandidat huruf (mis. "ADE") menjadi angka konkret berdasarkan
+// posisi huruf di data mentah 8-digit hari ini (A=posisi1...H=posisi8).
+// Ini yang bikin kandidat PRED "bukan tebakan buta" — begitu data mentah
+// hari ini diisi, tiap kandidat langsung ketahuan artinya angka berapa
+// di raw slot itu.
 function candidateDigitsFromRaw(cand,rawDigits){
   return candidateToDigit(cand,rawDigits);
 }
@@ -5784,40 +5630,114 @@ function loadSlotState(){try{const s=lsGet('tah2_slotstate');return s?JSON.parse
 function saveSlotState(){try{lsSet('tah2_slotstate',JSON.stringify(harianSlotState));}catch(e){}}
 function slotKey(sessKey,slot){return sessKey+'_'+slot;}
 
+function _harianRankFusion(list,positionList,target,rawDigits){
+  target=target||10;
+  const base=Array.isArray(list)?list:[];
+  const pos=Array.isArray(positionList)?positionList:[];
+  const byCand=new Map();
+  const baseMax=Math.max(1,base.length-1);
+  const posMax=Math.max(1,pos.length-1);
+
+  base.forEach((item,idx)=>{
+    if(!item||!item.cand)return;
+    byCand.set(item.cand,{
+      cand:item.cand,
+      baseScore:Number(item.score)||0,
+      baseRank:idx+1,
+      posRank:null,
+      source:item.source||'core'
+    });
+  });
+
+  pos.forEach((cand,idx)=>{
+    if(!cand)return;
+    const hit=byCand.get(cand);
+    if(hit){
+      hit.posRank=idx+1;
+      hit.source=(hit.source==='positional'?'positional':'core+position');
+    }else{
+      byCand.set(cand,{
+        cand,
+        baseScore:0,
+        baseRank:null,
+        posRank:idx+1,
+        source:'position'
+      });
+    }
+  });
+
+  // Ranking layer only: existing engine score remains dominant (75%);
+  // existing positional evidence supplies the remaining 25%. This does not
+  // generate a new candidate formula; it only orders already-generated
+  // candidates. RAW is used for the final digit projection below.
+  const ranked=[...byCand.values()].map(x=>{
+    const baseNorm=x.baseRank==null?0:(base.length-x.baseRank)/baseMax;
+    const posNorm=x.posRank==null?0:(pos.length-x.posRank)/posMax;
+    const fusion=baseNorm*0.75+posNorm*0.25;
+    return {...x,fusionScore:fusion};
+  }).sort((a,b)=>{
+    if(b.fusionScore!==a.fusionScore)return b.fusionScore-a.fusionScore;
+    if((b.baseScore||0)!==(a.baseScore||0))return (b.baseScore||0)-(a.baseScore||0);
+    return (a.baseRank||9999)-(b.baseRank||9999);
+  });
+
+  // Soft structural redundancy: exact duplicates are removed; candidates
+  // sharing the same letter multiset are capped at 2 so valid positional
+  // alternatives are not destroyed by an overly aggressive filter.
+  const exact=new Set(),familyCount=new Map(),selected=[];
+  for(const item of ranked){
+    if(exact.has(item.cand))continue;
+    const family=[...item.cand].sort().join('');
+    const fc=familyCount.get(family)||0;
+    if(fc>=2)continue;
+    exact.add(item.cand);
+    familyCount.set(family,fc+1);
+    selected.push(item);
+    if(selected.length>=target)break;
+  }
+
+  return selected.map((item,idx)=>({
+    letters:item.cand,
+    digits:candidateToDigit(item.cand,rawDigits),
+    source:item.source||'core',
+    rank:idx+1,
+    baseRank:item.baseRank,
+    positionRank:item.posRank,
+    fusionScore:+item.fusionScore.toFixed(6)
+  })).filter(c=>c.digits);
+}
+
 function computeSlotPredLocal(rawDigits,asOfDate){
-  // PENTING: 4D, 3D, 2D masing-masing di-scoring TERPISAH lewat engine
-  // yang sama (scoreCandidatesCombinedAsOf per panjang n) — BUKAN 3D/2D
-  // dipotong dari string digit 4D. Tiap panjang punya pool huruf & histori
-  // sendiri (2:56, 3:336, 4:1680 kombinasi), jadi hasilnya independen tapi
-  // tetap berbasis analisa data historis (bukan asal generate).
-  const full4=scoreCandidatesCombinedAsOf(4,ALL[4].length,asOfDate);
-  const cand4=injectPositionalCandidates(full4,diversifyCandidates(full4,10),4,asOfDate).map(s=>({
-    letters:s.cand,
-    digits:candidateToDigit(s.cand,rawDigits),
-    source:s.source||'core'
-  })).filter(c=>c.digits);
-  const full3=scoreCandidatesCombinedAsOf(3,ALL[3].length,asOfDate);
-  const cand3=injectPositionalCandidates(full3,diversifyCandidates(full3,10),3,asOfDate).map(s=>({
-    letters:s.cand,
-    digits:candidateToDigit(s.cand,rawDigits),
-    source:s.source||'core'
-  })).filter(c=>c.digits);
-  const full2=scoreCandidatesCombinedAsOf(2,ALL[2].length,asOfDate);
-  const cand2=injectPositionalCandidates(full2,diversifyCandidates(full2,10),2,asOfDate).map(s=>({
-    letters:s.cand,
-    digits:candidateToDigit(s.cand,rawDigits),
-    source:s.source||'core'
-  })).filter(c=>c.digits);
+  // HARIAN V2 — Raw-Aware Candidate Ranking.
+  // Semua candidate source tetap berasal dari mekanisme existing:
+  // scoreCandidatesCombinedAsOf + buildPositionalCandidates.
+  // Tidak membuat formula prediksi baru.
+  const build=(n)=>{
+    const full=scoreCandidatesCombinedAsOf(n,ALL[n].length,asOfDate);
+    const positional=buildPositionalCandidates(n,asOfDate,20,8);
+    return _harianRankFusion(full,positional,10,rawDigits);
+  };
+
+  const cand4=build(4);
+  const cand3=build(3);
+  const cand2=build(2);
+
+  // KEMBAR tetap berada di pipeline existing. HARIAN tuning ini hanya
+  // menyusun normal 4D/3D/2D; tidak mengubah engine Kembar.
   const kembar=[];
   KMB_TYPES.forEach(t=>{
     const topN=(t==='QUAD'||t==='TRIPLE')?4:5;
     const fullKmb=kmbShortlistAsOf(t,(KMB_POOL_BY_TYPE[t]||[]).length,asOfDate);
-    kmbInjectPositional(fullKmb,kmbDiversify(fullKmb,topN),t).forEach(s=>{
-      const digits=candidateDigitsFromRaw(s.cand,rawDigits);
-      if(digits)kembar.push({type:t,letters:s.cand,digits,source:s.source||'core'});
+    kmbInjectPositional(fullKmb,kmbDiversify(fullKmb,topN),t).forEach(x=>{
+      const digits=candidateDigitsFromRaw(x.cand,rawDigits);
+      if(digits)kembar.push({
+        type:t,letters:x.cand,digits,
+        source:x.source||'core'
+      });
     });
   });
-  return{cand4,cand3,cand2,kembar};
+
+  return{cand4,cand3,cand2,kembar,engineVersion:'harian-raw-aware-v2'};
 }
 
 function renderSlotBox(sessKey,slot){
@@ -5827,6 +5747,7 @@ function renderSlotBox(sessKey,slot){
   if(!st||!st.pred){box.innerHTML='';return;}
   const p=st.pred;
   let h=`<div class="gen-box" style="margin-top:6px;padding:8px 10px;border-color:var(--purple);background:rgba(179,136,255,0.06)">
+    <div style="font-size:7px;color:#4dd0e1;margin-bottom:6px;letter-spacing:1px">HARIAN V2 · RAW-AWARE CANDIDATE RANKING · per RAW/slot · existing score + existing positional signal</div>
     <div style="font-family:'Orbitron',monospace;font-size:7px;letter-spacing:2px;color:var(--purple);margin-bottom:6px">🔮 PRED KOLOM INI (dari raw ${st.raw}) — 4D+3D+2D masing-masing 10 kandidat (independen, bukan potongan)</div>`;
   const renderGroup=(label,list,cls)=>{
     if(!list||!list.length)return `<div style="font-size:8px;color:var(--dim);margin-bottom:6px">${label}: belum cukup data historis buat scoring.</div>`;
@@ -7127,12 +7048,12 @@ function _renderPredPerSlotTodayV2(n,cc){
       <div class="section-head" style="cursor:default">
         <div class="section-head-title">
           <div class="dot" style="background:#7ee787"></div>
-          <span style="color:#7ee787">📍 PRED PER-SLOT — PRED V2 Candidate Extension (per-posisi, ${all.length} slot tercatat)</span>
+          <span style="color:#7ee787">📍 PRED PER-SLOT — BATCH 2 (per-posisi, ${all.length} slot tercatat)</span>
         </div>
         <span style="font-size:8px;color:var(--gold)">JP: ${jpCount}/${totalScored} · ${jpRate}%</span>
       </div>
       <div class="section-body open" style="padding-top:6px">
-        <div style="font-size:8px;color:var(--dim);margin-bottom:8px">Kandidat dihitung mesin PRED V2 Candidate Extension (scoreCandidatesBatch2AsOf: probabilitas per-posisi + transisi per-posisi, decay eksponensial -- BUKAN ensemble V2+V3 spt Batch 1) -- update LIVE begitu 8 digit selesai diketik di HARIAN. 1 tanggal = 1 set kandidat, tiap slot dinilai JP/ZONK terpisah thd result-nya sendiri.</div>`;
+        <div style="font-size:8px;color:var(--dim);margin-bottom:8px">Kandidat dihitung mesin BATCH 2 (scoreCandidatesBatch2AsOf: probabilitas per-posisi + transisi per-posisi, decay eksponensial -- BUKAN ensemble V2+V3 spt Batch 1) -- update LIVE begitu 8 digit selesai diketik di HARIAN. 1 tanggal = 1 set kandidat, tiap slot dinilai JP/ZONK terpisah thd result-nya sendiri.</div>`;
     dates.forEach(d=>{
       const entries=byDate[d];
       const isToday=d===today;
@@ -7414,7 +7335,6 @@ function renderPredV2(n){
     <button class="btn-generate" id="btnGenV2${n}" onclick="handleGeneratePredV2(${n})" ${locked?'disabled':''}>
       ${locked?`✓ PREDIKSI TERKUNCI`:'⚡ GENERATE PREDIKSI (15 KANDIDAT)'}
     </button>
-    <button class="btn btn-undo" id="btnBackfillV2${n}" style="width:100%;margin-top:8px;font-size:9px;border-color:var(--gold);color:var(--gold)" onclick="handleRunFullBackfillV2('btnBackfillV2${n}')">🗂️ BACKFILL SEMUA DATA LAMPAU (V2)</button>
     ${locked&&!allDone?`<div class="locked-notice">Terkunci. Submit result aktual (<span style="color:var(--gold);font-weight:700">${resultCount}/${PRED_RESULT_LIMIT}</span> dilakukan) — generate baru terbuka setelah ${PRED_RESULT_LIMIT}x.</div>`:''}
     ${allDone?`<div class="locked-notice" style="color:var(--green);border-color:rgba(0,230,118,0.3);background:rgba(0,230,118,0.05)">✓ Limit ${PRED_RESULT_LIMIT}x tercapai. Generate baru tersedia.</div>`:''}
   </div>`;
@@ -7454,7 +7374,7 @@ function renderPredV2(n){
     }catch(e){}
     const draftToday=(rawDraft&&rawDraft.date===todayISO())?rawDraft.vals:null;
     const consensus=getConsensusSetV2(n);
-    html+=`<div style="font-family:'Orbitron',monospace;font-size:8px;letter-spacing:3px;color:var(--gold);margin-bottom:8px">15 KANDIDAT PREDIKSI (PRED V2 — Candidate Extension) — hasil analisa data historis, bukan acak</div>`;
+    html+=`<div style="font-family:'Orbitron',monospace;font-size:8px;letter-spacing:3px;color:var(--gold);margin-bottom:8px">15 KANDIDAT PREDIKSI (BATCH 2 — per-posisi) — hasil analisa data historis, bukan acak</div>`;
     if(draftToday){
       html+=`<div style="font-size:8px;color:var(--green);margin-bottom:6px">🔢 Data mentah hari ini sudah masuk — kandidat di bawah dicocokkan ke digit mentahnya (per slot), jadi bukan tebakan buta.</div>`;
     }
@@ -7573,7 +7493,7 @@ function renderHistTableV2(n){
   const total=known.length,jps=known.filter(h=>h.jp).length;
   const acc=total?((jps/total)*100).toFixed(0):'0';
   let html=`<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
-    <div style="font-family:'Orbitron',monospace;font-size:8px;letter-spacing:2px;color:var(--dim)">RIWAYAT PRED HISTORIS PRED V2 — Candidate Extension (1 set/hari -- lihat "PRED PER-SLOT — PRED V2 Candidate Extension" di atas utk versi per-slot)</div>
+    <div style="font-family:'Orbitron',monospace;font-size:8px;letter-spacing:2px;color:var(--dim)">RIWAYAT PRED HISTORIS BATCH 2 (1 set/hari -- lihat "PRED PER-SLOT — BATCH 2" di atas utk versi per-slot)</div>
     <div class="acc-badge">JP: ${jps}/${total} · ${acc}%</div></div>`;
   html+=`<table class="tbl"><thead><tr><th>TGL</th><th>KANDIDAT</th><th>RESULT</th><th>STATUS</th></tr></thead><tbody>`;
   [...hist].reverse().forEach(h=>{
@@ -7847,15 +7767,23 @@ function showResMsg(n,text,type){
 }
 
 // ============================================================
-// PRED V2 — Candidate Extension dari 8 fungsi generate/submit di atas. Beda teknis:
+// BATCH 2 — clone 1:1 dari 8 fungsi generate/submit di atas. Beda teknis:
 //  - scoreCandidatesBatch2(AsOf) bukan scoreCandidatesCombined(AsOf)
 //  - predStateV2/backdatePredV2/histStateV2 (bukan versi Batch 1)
 //  - TIDAK memanggil _recordEngineAudit (itu domain analytics "AUDIT
 //    ORACLE" milik Batch 1/AI PRED, di luar scope clone tampilan ini)
 //
-// Isolasi data: submit V2 TIDAK mendorong result ke state[n]/undoStack.
-// Pool historis utama tetap memiliki satu sumber kebenaran, sedangkan V2
-// hanya mencatat evaluasi dan state engine-nya sendiri.
+// PENYIMPANGAN SENGAJA dari "100% identik" (demi keamanan data, bukan
+// kelalaian): submitResultV2/submitBackdateResultV2 TIDAK ikut
+// mendorong hasil ke state[n]/undoStack (pool data historis utama
+// 2H/3H/4H) seperti versi Batch 1. Kalau ini diclone apa adanya, dan
+// user kebetulan submit result AKTUAL YANG SAMA di kedua tab (PRED dan
+// PRED V2 -- sangat mungkin terjadi krn keduanya independen), draw yang
+// sama akan masuk DUA KALI ke state[n], merusak seluruh analisis
+// frekuensi/gap yang dipakai SEMUA mesin (termasuk Batch 1 & 2 sendiri).
+// Push ke state[n] tetap jadi tanggung jawab TUNGGAL Batch 1
+// (submitResult/submitBackdateResult) & alur HARIAN — Batch 2 di sini
+// murni mencatat akurasinya sendiri (histStateV2/predStateV2.status).
 // ============================================================
 function handleGeneratePredV2(n){
   const dInp=$id('predV2Date'+n);
@@ -7873,10 +7801,11 @@ function generatePredBackdateV2(n,dateISO){
     renderPredV2(n);
     return;
   }
-  const bundle=_predV2CandidateBundle(n,dateISO,PRED_V2_TARGET);
-  const candidates=bundle.candidates;
-  const candidateSources=bundle.candidateSources;
-  backdatePredV2[n]={date:dateISO,candidates,candidateSources,v1Candidates:bundle.v1Candidates,rawContext:rawDraft&&rawDraft.date===dateISO?JSON.parse(JSON.stringify(rawDraft)):null,engineVersion:PRED_V2_ENGINE_VERSION};
+  const fullBd=scoreCandidatesBatch2AsOf(n,ALL[n].length,dateISO);
+  const tagged=injectPositionalCandidates(fullBd,diversifyCandidates(fullBd,15),n,dateISO);
+  const candidates=tagged.map(s=>s.cand);
+  const candidateSources=tagged.map(s=>s.source||'core');
+  backdatePredV2[n]={date:dateISO,candidates,candidateSources,engineVersion:'batch2'};
   const found=_actualEntriesForDate(n,dateISO);
   const distinctVals=[...new Set(found.map(e=>e.v))];
   if(distinctVals.length===1){_autoRecordBackdateResultV2(n,distinctVals[0]);return;}
@@ -7888,10 +7817,7 @@ function _autoRecordBackdateResultV2(n,val){
   if(!bp)return;
   const hitIdx=bp.candidates.indexOf(val);
   const isJp=hitIdx>=0;
-  const v1HitIdx=(bp.v1Candidates||[]).indexOf(val);
-  const v1Hit=v1HitIdx>=0;
-  const additionalHit=isJp&&!v1Hit;
-  histStateV2[n].push({date:bp.date,candidates:[...bp.candidates],v1Candidates:[...(bp.v1Candidates||[])],result:val,jp:isJp,v1Hit,v1HitIdx,additionalHit,engineVersion:PRED_V2_ENGINE_VERSION});
+  histStateV2[n].push({date:bp.date,candidates:[...bp.candidates],result:val,jp:isJp,engineVersion:'batch2'});
   saveHistStateV2(n);
   backdatePredV2[n]=null;
   renderPredV2(n);
@@ -7910,7 +7836,7 @@ function submitBackdateResultV2(n){
   const showErr=(t)=>{if(msgEl){msgEl.textContent='⚠ '+t;msgEl.className='result-msg show zonk';}};
 
   if(raw==='ZONK'){
-    histStateV2[n].push({date:bp.date,candidates:[...bp.candidates],v1Candidates:[...(bp.v1Candidates||[])],result:'ZONK',jp:false,v1Hit:false,v1HitIdx:-1,additionalHit:false,engineVersion:PRED_V2_ENGINE_VERSION});
+    histStateV2[n].push({date:bp.date,candidates:[...bp.candidates],result:'ZONK',jp:false,engineVersion:'batch2'});
     saveHistStateV2(n);
     backdatePredV2[n]=null;
     renderPredV2(n);
@@ -7923,21 +7849,7 @@ function submitBackdateResultV2(n){
 
   const hitIdx=bp.candidates.indexOf(raw);
   const isJp=hitIdx>=0;
-  const v1HitIdx=(bp.v1Candidates||[]).indexOf(raw);
-  const v1Hit=v1HitIdx>=0;
-  const additionalHit=isJp&&!v1Hit;
-  histStateV2[n].push({
-    date:bp.date,
-    candidates:[...bp.candidates],
-    v1Candidates:[...(bp.v1Candidates||[])],
-    rawContext:bp.rawContext||null,
-    result:raw,
-    jp:isJp,
-    v1Hit,
-    v1HitIdx,
-    additionalHit,
-    engineVersion:PRED_V2_ENGINE_VERSION
-  });
+  histStateV2[n].push({date:bp.date,candidates:[...bp.candidates],result:raw,jp:isJp,engineVersion:'batch2'});
   saveHistStateV2(n);
   backdatePredV2[n]=null;
   renderPredV2(n);
@@ -7947,10 +7859,11 @@ function generatePredV2(n,force){
   const ps=predStateV2[n];
   const isTodayLocked=(ps.date===today&&ps.candidates.length>0&&(ps.results||[]).length<PRED_RESULT_LIMIT);
   if(isTodayLocked&&(!force||(ps.results||[]).length>0))return;
-  const bundle=_predV2CandidateBundle(n,null,PRED_V2_TARGET);
-  const candidates=bundle.candidates;
-  const candidateSources=bundle.candidateSources;
-  predStateV2[n]={date:today,candidates,candidateSources,v1Candidates:bundle.v1Candidates,rawContext:rawDraft&&rawDraft.date===today?JSON.parse(JSON.stringify(rawDraft)):null,status:candidates.map(()=>'pending'),result:null,results:[],engineVersion:PRED_V2_ENGINE_VERSION};
+  const fullLive=scoreCandidatesBatch2(n,ALL[n].length);
+  const tagged=injectPositionalCandidates(fullLive,diversifyCandidates(fullLive,15),n,null);
+  const candidates=tagged.map(s=>s.cand);
+  const candidateSources=tagged.map(s=>s.source||'core');
+  predStateV2[n]={date:today,candidates,candidateSources,status:candidates.map(()=>'pending'),result:null,results:[],engineVersion:'batch2'};
   savePredStateV2(n);
   _histUpsertPendingV2(n,predStateV2[n]);
   renderPredV2(n);
@@ -7971,17 +7884,14 @@ function submitResultV2(n){
   }
   const hitIdx=ps.candidates.indexOf(val);
   const isJp=hitIdx>=0;
-  const v1HitIdx=(ps.v1Candidates||[]).indexOf(val);
-  const v1Hit=v1HitIdx>=0;
-  const additionalHit=isJp&&!v1Hit;
   ps.result=val;
-  ps.results.push({val,isJp,hitIdx,v1Hit,v1HitIdx,additionalHit,ts:nowTs()});
+  ps.results.push({val,isJp,hitIdx,ts:nowTs()});
   ps.status=ps.candidates.map(c=>c===val?'jp':'zonk');
   savePredStateV2(n);
 
   const pendIdx=histStateV2[n].findIndex(h=>h.date===ps.date&&h.result===null);
-  if(pendIdx>=0){histStateV2[n][pendIdx].result=val;histStateV2[n][pendIdx].jp=isJp;histStateV2[n][pendIdx].v1Candidates=[...(ps.v1Candidates||[])];histStateV2[n][pendIdx].rawContext=ps.rawContext||null;histStateV2[n][pendIdx].v1Hit=v1Hit;histStateV2[n][pendIdx].v1HitIdx=v1HitIdx;histStateV2[n][pendIdx].additionalHit=additionalHit;}
-  else histStateV2[n].push({date:ps.date,candidates:[...ps.candidates],v1Candidates:[...(ps.v1Candidates||[])],rawContext:ps.rawContext||null,result:val,jp:isJp,v1Hit,v1HitIdx,additionalHit,engineVersion:PRED_V2_ENGINE_VERSION});
+  if(pendIdx>=0){histStateV2[n][pendIdx].result=val;histStateV2[n][pendIdx].jp=isJp;}
+  else histStateV2[n].push({date:ps.date,candidates:[...ps.candidates],result:val,jp:isJp,engineVersion:'batch2'});
   saveHistStateV2(n);
 
   renderPredV2(n);
@@ -9707,9 +9617,9 @@ function _fillPredSlotResult(dateISO,sessKey,slot,resultVal,sessSlots){
 }
 
 // ============================================================
-// PRED V2 — pipeline per-slot terpisah dari V1 (load/save predSlotLog,
+// BATCH 2 — clone 1:1 dari 4 fungsi persis di atas (load/save predSlotLog,
 // hitung kandidat as-of, auto-generate per-slot, isi result+cross-slot),
-// SATU-SATUNYA beda: sumber kandidat PRED V2 Candidate Extension Engine (bukan
+// SATU-SATUNYA beda: sumber kandidat scoreCandidatesBatch2AsOf (bukan
 // scoreCandidatesCombinedAsOf). Key storage & object data SEPENUHNYA
 // terpisah dari Batch 1 (predSlotLogV2, key 'tah2_predslotlogv2_*') --
 // tidak ada sync ke SBData (lihat catatan di loadPredStateV2/dst di atas).
@@ -9719,8 +9629,9 @@ function savePredSlotLogV2(n){
   try{lsSet('tah2_predslotlogv2_'+n,JSON.stringify(predSlotLogV2[n]));try{AHSyncEngine.markPendingExtended();}catch(e2){}}catch(e){}
 }
 function _computePredSlotCandidatesAsOfV2(n,asOfDateISO){
-  const b=_predV2CandidateBundle(n,asOfDateISO,PRED_V2_TARGET);
-  return{candidates:b.candidates,candidateSources:b.candidateSources,v1Candidates:b.v1Candidates};
+  const fullLive=scoreCandidatesBatch2AsOf(n,ALL[n].length,asOfDateISO);
+  const tagged=injectPositionalCandidates(fullLive,diversifyCandidates(fullLive,15),n,asOfDateISO);
+  return{candidates:tagged.map(s=>s.cand),candidateSources:tagged.map(s=>s.source||'core')};
 }
 function _autoGeneratePredSlotEntryV2(dateISO,sessKey,slot,n,raw){
   try{
@@ -9773,31 +9684,36 @@ function _logHarianPredGen(sessKey,slot,raw){
   try{
     const dInp=$id('harianDate');
     const asOfDate=dInp&&dInp.value?dInp.value:todayISO();
-    // Dedupe: kombinasi tanggal+sesi+slot+raw yg PERSIS SAMA tidak dicatat
-    // ulang (mis. user hapus 1 digit lalu ketik ulang digit yg sama persis
-    // -> tetap 1 entri, bukan spam berkali-kali).
     const dupKey=asOfDate+'|'+sessKey+'|'+slot+'|'+raw;
     if(harianPredGenLog.some(e=>e.dupKey===dupKey))return;
+
     const pred=computeSlotPredLocal(raw,asOfDate);
-    // Request 2026-08: ikut simpan PREDIKSI POSISI POLA HURUF -- posisi mana
-    // di 8 digit mentah yg SECARA HISTORIS (s/d saat ini) paling sering jadi
-    // sumber huruf pemenang. Ini prediksi terpisah dari kandidat huruf biasa
-    // (cand4/cand3/cand2) -- dipakai nanti utk audit posMatchAudit begitu
-    // result masuk (lihat _recordPosMatchAudit).
     let posPrediction=null;
     try{posPrediction=computeRawPositionStats().ranked.slice(0,5);}catch(ePos){}
+
     harianPredGenLog.unshift({
       id:'hpg_'+Date.now()+'_'+sessKey+'_'+slot,
       dupKey,ts:nowTs(),dateISO:asOfDate,sessKey,slot,raw,
       cand4:pred.cand4,cand3:pred.cand3,cand2:pred.cand2,kembar:pred.kembar,
-      posPrediction,updatedAt:Date.now(),backfilled:false,
-      // Diisi belakangan begitu result-nya masuk (lihat _recordPosMatchAudit) —
-      // null dulu di sini supaya struktur field-nya konsisten di semua entri.
-      actualResult:null,actualTrace:null,posMatchAudit:null,candidateHitAudit:null
+      posPrediction,
+      candidateBoardVersion:'harian-raw-aware-v2',
+      candidateBoard:{
+        perRaw:true,
+        targetPerMode:10,
+        fusionWeights:{existingScore:0.75,positionSignal:0.25},
+        structuralFamilyCap:2,
+        noPermutationFarming:true
+      },
+      updatedAt:Date.now(),backfilled:false,
+      actualResult:null,actualTrace:null,posMatchAudit:null,candidateHitAudit:null,
+      exactHit:false,hitIndex:null,
+      partialMatch:null,partialBest:null,
+      evaluation:null
     });
     saveHarianPredGenLog();
-  }catch(e){/* gagal catat log tidak boleh menggagalkan auto-preview kandidat */}
+  }catch(e){/* gagal catat audit tidak boleh menggagalkan auto-preview */}
 }
+
 // BUGFIX 2026-08 (temuan audit bareng user): versi sebelumnya membandingkan
 // DIGIT kandidat (c.digits, hasil reverse-mapping huruf lewat POSISI RAW
 // hari itu) vs DIGIT result (resultDigits, angka MENTAH yang diketik user
@@ -9844,22 +9760,70 @@ function _recordPosMatchAudit(dateISO,sessKey,slot,raw,resultVal,resultTrace,res
     const dupKey=dateISO+'|'+sessKey+'|'+slot+'|'+raw;
     const entry=harianPredGenLog.find(e=>e.dupKey===dupKey);
     if(!entry)return;
+
     entry.actualResult=resultVal||null;
     entry.actualTrace=resultTrace||null;
     entry.updatedAt=Date.now();
+
     if(entry.posPrediction&&resultTrace&&resultTrace.length){
       const predictedTopPos=entry.posPrediction.map(p=>p.rawPos);
       const actualPos=[...new Set(resultTrace.map(t=>t.rawPos).filter(Boolean))];
       const matchedPositions=actualPos.filter(p=>predictedTopPos.includes(p));
       entry.posMatchAudit={
         predictedTopPos,actualPos,matchedPositions,
+        matchedCount:matchedPositions.length,
         hit:matchedPositions.length>0,
         hitTop1:actualPos.includes(predictedTopPos[0])
       };
     }
+
     entry.candidateHitAudit=_computeCandidateHitAudit(entry,entry.actualResult);
+
+    const len=entry.actualResult?entry.actualResult.length:0;
+    const list=len===4?entry.cand4:len===3?entry.cand3:len===2?entry.cand2:[];
+    const idx=Array.isArray(list)?list.findIndex(c=>c.letters===entry.actualResult):-1;
+    entry.exactHit=idx>=0;
+    entry.hitIndex=idx>=0?idx:null;
+
+    // Diagnostic only: exact remains the primary HARIAN success metric.
+    // Partial is based on projected digits for the same result length.
+    const resultDigitsNorm=resultDigits||'';
+    if(resultDigitsNorm&&Array.isArray(list)&&list.length){
+      const scored=list.map((c,i)=>({
+        rank:i+1,
+        candidate:c.letters,
+        digits:c.digits||'',
+        matchedPositions:partialDigitMatch(c.digits||'',resultDigitsNorm)
+      }));
+      scored.sort((a,b)=>b.matchedPositions-a.matchedPositions||a.rank-b.rank);
+      const rank1=scored.find(x=>x.rank===1);
+      const best=scored[0];
+      entry.partialMatch=rank1?{
+        matchedPositions:rank1.matchedPositions,
+        length:resultDigitsNorm.length,
+        ratio:+(rank1.matchedPositions/resultDigitsNorm.length).toFixed(4)
+      }:null;
+      entry.partialBest=best?{
+        matchedPositions:best.matchedPositions,
+        length:resultDigitsNorm.length,
+        rank:best.rank,
+        candidate:best.candidate,
+        ratio:+(best.matchedPositions/resultDigitsNorm.length).toFixed(4)
+      }:null;
+    }
+
+    entry.evaluation={
+      status:entry.exactHit?'EXACT':'MISS',
+      exactHit:entry.exactHit,
+      hitIndex:entry.hitIndex,
+      partialRank1:entry.partialMatch,
+      partialBest:entry.partialBest,
+      positionTop1Hit:entry.posMatchAudit?!!entry.posMatchAudit.hitTop1:null,
+      positionTop5Overlap:entry.posMatchAudit?!!entry.posMatchAudit.hit:null
+    };
+
     saveHarianPredGenLog();
-  }catch(e){/* gagal catat audit posisi tidak boleh menggagalkan penyimpanan result */}
+  }catch(e){/* audit tidak boleh menggagalkan penyimpanan result */}
 }
 
 // ============================================================
@@ -10139,7 +10103,7 @@ function backfillMissingArchives(){
       if(!r.predSnapshot){
         try{
           const pred=computeSlotPredLocal(r.raw,r.date);
-          r.predSnapshot={cand4:(pred.cand4||[]).slice(0,10),cand3:(pred.cand3||[]).slice(0,10),cand2:(pred.cand2||[]).slice(0,10),kembar:(pred.kembar||[]).slice(0,12)};
+          r.predSnapshot={cand4:(pred.cand4||[]).slice(0,10),cand3:(pred.cand3||[]).slice(0,10),cand2:(pred.cand2||[]).slice(0,10),kembar:(pred.kembar||[]).slice(0,12),engineVersion:pred.engineVersion||'harian-raw-aware-v2'};
           filledPredSnapshot++;
         }catch(e){}
       }
@@ -10234,13 +10198,13 @@ function renderPredGenLog(){
 
   let html=`<div class="uni-input-box" style="border-color:#4dd0e1">
     <div class="uni-title" style="color:#4dd0e1">🗂 HISTORI KANDIDAT PREDIKSI</div>
-    <div class="uni-sub">Setiap kali 8 digit mentah selesai diketik di tab HARIAN, kandidat prediksi (4D/3D/2D + Kembar) otomatis dihasilkan DAN dicatat di sini — permanen, tanpa batas, terlepas dari apakah result-nya sudah masuk atau belum. Ini bahan mentah paling lengkap untuk audit "kandidat vs result vs engine" (bawa lewat EXPORT ke Claude di luar tracker).</div>
+    <div class="uni-sub">Setiap kali 8 digit mentah selesai diketik di tab HARIAN, kandidat prediksi (4D/3D/2D + Kembar) otomatis dihasilkan DAN dicatat di sini — permanen, tanpa batas, terlepas dari apakah result-nya sudah masuk atau belum. Ini bahan mentah untuk audit kandidat-vs-result. HARIAN V2 menyusun candidate board per RAW/slot dari engine existing + signal posisi, tanpa formula prediksi baru.</div>
     <button class="btn" style="width:100%;margin-top:8px;padding:8px;font-size:9px;border-color:#4dd0e1;color:#4dd0e1" onclick="_runBackfillMissingArchives()">🔄 Perbaiki entri lama yang belum punya arsip (backfill)</button>
     <button class="btn" style="width:100%;margin-top:6px;padding:8px;font-size:9px;border-color:var(--gold);color:var(--gold)" onclick="_runRecalibrateNow()">⚙ Jalankan Kalibrasi Sekarang (pakai histori yang sudah ada)</button>
   </div>`;
 
   html+=`<div style="margin-top:8px;padding:8px 10px;background:var(--panel2);border-radius:8px;font-size:9px;color:var(--dim)">
-    📦 Total tercatat: <b style="color:#fff">${total}</b> generasi kandidat. Otomatis ikut ter-backup lewat <b style="color:var(--gold)">EXPORT → BACKUP LENGKAP</b> dan tersinkron ke Supabase.
+    📦 Total tercatat: <b style="color:#fff">${total}</b> generasi candidate board. Otomatis ikut ter-backup lewat <b style="color:var(--gold)">EXPORT → BACKUP LENGKAP</b> dan tersinkron ke Supabase.
     ${total>SHOW_LIMIT?`<div style="margin-top:4px">Menampilkan ${SHOW_LIMIT} terbaru di sini — riwayat lengkap tetap tersimpan semua, ambil lewat export kalau butuh semuanya.</div>`:''}
   </div>`;
 
@@ -10261,6 +10225,10 @@ function renderPredGenLog(){
         ${entry.kembar&&entry.kembar.length?`<div style="font-size:8px;color:var(--purple);margin-top:2px">🔁 Kembar: ${entry.kembar.length} kandidat</div>`:''}
         ${entry.posPrediction&&entry.posPrediction.length?`<div style="font-size:8px;color:#4dd0e1;margin-top:4px">📐 Prediksi posisi (top-5): ${entry.posPrediction.map(p=>`pos${p.rawPos} (${p.pct}%)`).join(', ')}</div>`:''}
         ${entry.posMatchAudit?`<div style="font-size:8px;margin-top:2px;color:${entry.posMatchAudit.hitTop1?'var(--green)':'var(--red)'}">${entry.posMatchAudit.hitTop1?'✓':'✕'} Audit posisi: result=${entry.actualResult||'-'} — posisi #1 prediksi (pos${entry.posMatchAudit.predictedTopPos[0]}) ${entry.posMatchAudit.hitTop1?'TEPAT':'meleset'} · posisi aktual [${entry.posMatchAudit.actualPos.join(',')}] <span style="color:var(--dim)">(overlap top-5: ${entry.posMatchAudit.hit?'ya':'tidak'} — metrik longgar, jangan disamakan dgn akurasi #1 di atas)</span></div>`:(entry.dateISO?'<div style="font-size:8px;color:var(--dim);margin-top:2px">⏳ Menunggu result masuk untuk audit posisi</div>':'')}
+        ${entry.evaluation?`<div style="font-size:8px;margin-top:4px;color:${entry.evaluation.exactHit?'var(--green)':'var(--dim)'}">
+          ${entry.evaluation.exactHit?'🏆 EXACT':'— MISS'}${entry.hitIndex!=null?' · rank #'+(entry.hitIndex+1):''}
+          ${entry.partialBest?` · best partial ${entry.partialBest.matchedPositions}/${entry.partialBest.length} (rank #${entry.partialBest.rank})`:''}
+        </div>`:''}
         ${entry.candidateHitAudit?(()=>{const c=entry.candidateHitAudit;const any=c.cand4Rank||c.cand3Rank||c.cand2Rank;return `<div style="font-size:8px;margin-top:2px;color:${any?'var(--green)':'var(--red)'}">${any?'✓':'✕'} Audit kandidat: 4D=${c.cand4Rank?'rank #'+c.cand4Rank:'meleset'} · 3D=${c.cand3Rank?'rank #'+c.cand3Rank:'meleset'} · 2D=${c.cand2Rank?'rank #'+c.cand2Rank:'meleset'}</div>`;})():''}
       </div>`;
     });
@@ -12658,8 +12626,9 @@ async function boot(){
     rawLog=await loadRawLog();
     predState[2]=loadPredState(2);predState[3]=loadPredState(3);predState[4]=loadPredState(4);predState.KMB=loadPredState('KMB');
     histState[2]=loadHistState(2);histState[3]=loadHistState(3);histState[4]=loadHistState(4);histState.KMB=loadHistState('KMB');
-    // PRED V2 (2026-08-28) — Candidate Extension Engine. Namespace storage
-    // terpisah total dari PRED V1; engine V2 dan state V2 berdiri sendiri.
+    // BATCH 2 (2026-08-27, permintaan user: tab "PRED V2" -- clone tampilan
+    // 100% identik dgn tab PRED, cuma metode skoring kandidatnya beda, lihat
+    // scoreCandidatesBatch2). Namespace storage terpisah total dari Batch 1.
     [2,3,4].forEach(n=>{predStateV2[n]=loadPredStateV2(n);histStateV2[n]=loadHistStateV2(n);predSlotLogV2[n]=loadPredSlotLogV2(n);});
 
     KMB_TYPES.forEach(t=>{kState[t]=kmbLoadByType(t);});

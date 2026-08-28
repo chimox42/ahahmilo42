@@ -517,9 +517,8 @@ body.restore-lock-active button,body.restore-lock-active input[type="file"],body
   <div class="tab" id="tab2" onclick="switchTab(2)">2H<span class="tab-badge" id="tbadge2"></span></div>
   <div class="tab" id="tab3" onclick="switchTab(3)">3H<span class="tab-badge" id="tbadge3"></span></div>
   <div class="tab" id="tab4" onclick="switchTab(4)">4H<span class="tab-badge" id="tbadge4"></span></div>
-  <div class="tab" id="tab-pred" onclick="switchTab('pred')">PRED</div>
+  <div class="tab" id="tab-pred" onclick="switchTab('pred')">PRED V1</div>
   <div class="tab" id="tab-predv2" onclick="switchTab('predv2')" style="color:#7ee787">PRED V2</div>
-  <div class="tab" id="tab-predv3" onclick="switchTab('predv3')" style="color:#ffb74d">PRED V3</div>
   <div class="tab" id="tab-aipred" onclick="switchTab('aipred')" style="color:var(--purple)">🤖 AI PRED</div>
   <div class="tab" id="tab-intel" onclick="switchTab('intel')" style="color:#b98cff">🔎 DETAIL KANDIDAT</div>
   <div class="tab" id="tab-analisa" onclick="switchTab('analisa')">ANALISA</div>
@@ -591,11 +590,6 @@ body.restore-lock-active button,body.restore-lock-active input[type="file"],body
   <div class="subpage active" id="predv2-sub-2"></div>
   <div class="subpage" id="predv2-sub-3"></div>
   <div class="subpage" id="predv2-sub-4"></div>
-</div>
-
-<!-- ============ PRED V3 — FUSION HARIAN + PRED V1 (2026-08-28) ============ -->
-<div class="page" id="page-predv3">
-  <div id="predv3-content"></div>
 </div>
 
 <!-- ============ AI PRED (metode terpisah — data mentah + analisa histori, disusun Oracle) ============ -->
@@ -997,7 +991,6 @@ function renderHarian(){
   html+=`<button class="btn-uni-add" style="width:100%;margin-bottom:14px" onclick="submitHarian()">💾 SIMPAN SEMUA SESI HARI INI</button>`;
 
   html+=`<div class="divider"></div>
-  <div id="historicalSyncPanel"></div>
   <div style="font-size:9px;letter-spacing:2px;color:var(--purple);margin-bottom:7px">🗂 RIWAYAT INPUT HARIAN (semua data)</div>
   <div id="jejakPolaBatchBar" style="display:flex;align-items:center;gap:8px;margin-bottom:8px;font-size:9px;flex-wrap:wrap">
     <button class="btn btn-undo" style="padding:4px 10px;font-size:9px" onclick="batchComputeJejakPola()">🔍 Hitung Jejak Pola untuk semua histori</button>
@@ -1008,7 +1001,6 @@ function renderHarian(){
 
   setHTML('harian-content',html);
   harianDateChanged();
-  if($id('historicalSyncPanel'))renderHistoricalSyncPanel();
   renderHarianOracleBox();
   renderHarianRecalcBox();
   renderHarianLog();
@@ -1576,18 +1568,7 @@ function _harianAutoPredOnRawInput(sessKey,slot){
     // dibandingkan sbg 2 pendekatan independen. Sekarang PRED generate
     // kandidatnya SENDIRI (scoreCandidatesCombinedAsOf, pola historis) tapi
     // tetap berperilaku spt HARIAN: otomatis, per-slot, per-tanggal, TIDAK
-    // nunggu result. _autoGeneratePredTab() (predState lama, 1/hari) tetap
-    // dipertahankan terpisah di bawah (2 mesin dibandingkan, bukan diganti).
-    _autoGeneratePredTab();
-    [2,3,4].forEach(nn=>_autoGeneratePredSlotEntry(asOfDate,sessKey,slot,nn,raw));
-    [2,3,4].forEach(nn=>_autoGeneratePredSlotEntryV2(asOfDate,sessKey,slot,nn,raw));
-    try{[2,3,4].forEach(nn=>renderPred(nn));}catch(eRP){}
-    try{[2,3,4].forEach(nn=>renderPredV2(nn));}catch(eRP2){}
   }
-}
-function _autoGeneratePredTab(){
-  [2,3,4].forEach(n=>{try{generatePred(n);}catch(e){}});
-  try{generatePredKmb();}catch(e){}
 }
 // Request 2026-08: field result default-nya keyboard numerik (sama kayak
 // raw digit, lebih cepat) — tombol ini buat pindah sementara ke keyboard
@@ -1684,1276 +1665,6 @@ function renderHarianPredBox(sessKey){
 
 
 // ============================================================
-// GLOBAL HISTORICAL CLOCK + PRED V2 BACKFILL + PRED V3 FUSION (2026-08-28)
-// RAW_LOG adalah MASTER TIMELINE. Engine lain boleh tertinggal, tetapi tidak
-// boleh menjadikan tanggal tertinggal itu sebagai frontier global. Backfill
-// mengejar frontier RAW secara walk-forward; data asli tidak diubah.
-// ============================================================
-let GLOBAL_DATA_CLOCK={lastRawDate:null,firstRawDate:null,totalRawEntries:0,totalRawDates:0,checkedAt:null};
-let predV2BackfillLast=null;
-let predV3Last=null;
-const PRED_V2_BACKFILL_VERSION='PRED-V2-BACKFILL-v1';
-const PRED_V3_VERSION='PRED-V3-FUSION-v1';
-
-function getGlobalDataClock(){
-  const rows=(rawLog||[]).filter(r=>r&&r.date&&r.raw&&r.raw.length===8);
-  const dates=[...new Set(rows.map(r=>r.date))].sort();
-  GLOBAL_DATA_CLOCK={lastRawDate:dates.length?dates[dates.length-1]:null,firstRawDate:dates.length?dates[0]:null,totalRawEntries:rows.length,totalRawDates:dates.length,checkedAt:new Date().toISOString()};
-  return GLOBAL_DATA_CLOCK;
-}
-function _maxDate(arr,field='date'){
-  const ds=(arr||[]).map(x=>x&&x[field]).filter(Boolean).sort();
-  return ds.length?ds[ds.length-1]:null;
-}
-function validateHistoricalAlignment(){
-  const clock=getGlobalDataClock();
-  const report={master:clock,targets:{},ok:true};
-  const targets={
-    HARIAN:rawLog||[],
-    PRED_V1:[...(histState[2]||[]),...(histState[3]||[]),...(histState[4]||[])],
-    PRED_V2:[...(histStateV2[2]||[]),...(histStateV2[3]||[]),...(histStateV2[4]||[])],
-    KEMBAR:[...(typeof kHistState!=='undefined'&&kHistState)?Object.values(kHistState).flat():[]],
-    PRED_V3:predV3Last&&predV3Last.rows?predV3Last.rows:[]
-  };
-  Object.entries(targets).forEach(([name,arr])=>{
-    const d=_maxDate(arr); report.targets[name]={lastDate:d,aligned:!clock.lastRawDate||!d||d===clock.lastRawDate};
-    if(clock.lastRawDate&&d&&d!==clock.lastRawDate)report.ok=false;
-  });
-  return report;
-}
-function _v2ResultForMode(result,n){
-  if(!result||result==='ZONK')return null;
-  const L=result.length;
-  if(L===n)return result;
-  if(L>n&&L<=4)return result.slice(L-n);
-  return null;
-}
-function _v2CandidatesAt(n,dateISO){
-  const full=scoreCandidatesBatch2AsOf(n,ALL[n].length,dateISO);
-  const tagged=injectPositionalCandidates(full,diversifyCandidates(full,15),n,dateISO);
-  return tagged.map(x=>x.cand);
-}
-function _upsertHistV2Local(n,entry){
-  const arr=histStateV2[n]||[];
-  const key=(h)=>h&&h.date===entry.date&&h.session===entry.session&&h.slot===entry.slot;
-  const idx=arr.findIndex(key);
-  if(idx>=0)arr[idx]=entry;else arr.push(entry);
-  arr.sort((a,b)=>String(a.date||'').localeCompare(String(b.date||'')));
-  histStateV2[n]=arr;
-}
-async function runPredV2HistoricalBackfill(saveRemote=true){
-  const clock=getGlobalDataClock();
-  const source=[...(rawLog||[])].filter(r=>r&&r.date&&r.date<todayStr()&&r.raw&&r.raw.length===8&&r.result&&r.result!=='ZONK').sort((a,b)=>{
-    const ka=`${a.date}|${HARIAN_SESSION_ORDER[a.session]??9}|${a.slot||0}`;
-    const kb=`${b.date}|${HARIAN_SESSION_ORDER[b.session]??9}|${b.slot||0}`;return ka.localeCompare(kb);
-  });
-  const rows=[];
-  for(const r of source){
-    for(const n of [2,3,4]){
-      if(r.appliedTo&&!r.appliedTo.includes(n))continue;
-      const target=_v2ResultForMode(r.result,n); if(!target)continue;
-      const candidates=_v2CandidatesAt(n,r.date);
-      const rank=candidates.indexOf(target); const jp=rank>=0;
-      const row={date:r.date,session:r.session||'',slot:r.slot||0,raw:r.raw,result:r.result,mode:n,target,candidates,rank:jp?rank+1:null,jp,engineVersion:PRED_V2_BACKFILL_VERSION};
-      rows.push(row);
-      _upsertHistV2Local(n,{date:r.date,candidates,result:target,jp,session:r.session,slot:r.slot,engineVersion:PRED_V2_BACKFILL_VERSION});
-    }
-  }
-  [2,3,4].forEach(n=>saveHistStateV2(n));
-  predV2BackfillLast={version:PRED_V2_BACKFILL_VERSION,calculatedAt:new Date().toISOString(),lastRawDate:clock.lastRawDate,totalRows:rows.length,rows};
-  if(saveRemote&&typeof SBData!=='undefined'&&SBData.upsertPredV2BackfillAudit){
-    const payload=rows.map(r=>({data_date:r.date,session:r.session,slot:r.slot,raw:r.raw,result:r.result,candidates4:r.mode===4?r.candidates:[],candidates3:r.mode===3?r.candidates:[],candidates2:r.mode===2?r.candidates:[],rank4:r.mode===4?r.rank:null,rank3:r.mode===3?r.rank:null,rank2:r.mode===2?r.rank:null,status4:r.mode===4?(r.jp?'JP':'ZONK'):null,status3:r.mode===3?(r.jp?'JP':'ZONK'):null,status2:r.mode===2?(r.jp?'JP':'ZONK'):null,engine_version:PRED_V2_BACKFILL_VERSION}));
-    const sr=await SBData.upsertPredV2BackfillAudit(payload); if(!sr.ok)throw new Error(sr.reason||'Gagal menyimpan PRED V2 backfill');
-  }
-  try{renderPredV2(activePredSubV2);renderHistoricalSyncPanel();}catch(e){}
-  return predV2BackfillLast;
-}
-// WRAPPER UI (additive-only) — tombol BACKFILL SEMUA DATA LAMPAU di PRED V2,
-// memanggil runPredV2HistoricalBackfill yang sudah ada, tanpa mengubah logikanya.
-async function handleRunFullBackfillV2(btnId){
-  const btn=$id(btnId);
-  const orig=btn?btn.textContent:'';
-  if(btn){btn.disabled=true;btn.textContent='⏳ MEMPROSES…';}
-  try{
-    const before=predV2BackfillLast?predV2BackfillLast.totalRows:0;
-    const result=await runPredV2HistoricalBackfill(true);
-    const added=(result&&result.totalRows||0)-before;
-    if(btn)btn.textContent=added>0?`✓ ${added} riwayat baru ditambahkan`:'✓ Sudah lengkap, tidak ada yang baru';
-  }catch(e){
-    if(btn)btn.textContent='✕ Gagal — coba lagi';
-  }
-  setTimeout(()=>{if(btn){btn.disabled=false;btn.textContent=orig;}},3000);
-}
-
-function _rankScore(rank,maxRank){return rank==null?0:1-((rank-1)/Math.max(1,maxRank-1));}
-function _v3Candidates(n,dateISO,raw){
-  const har=computeSlotPredLocal(raw,dateISO)[`cand${n}`]||[];
-  const v1full=scoreCandidatesCombinedAsOf(n,ALL[n].length,dateISO);
-  const v1=injectPositionalCandidates(v1full,diversifyCandidates(v1full,15),n,dateISO).map(x=>x.cand);
-  const pool=[...new Set([...har.map(x=>x.letters).filter(Boolean),...v1])];
-  const hMap=new Map(har.map((x,i)=>[x.letters,i+1]));
-  const vMap=new Map(v1.map((x,i)=>[x,i+1]));
-  const maxRank=15;
-  const scored=pool.map(cand=>{
-    const hr=hMap.get(cand)||null, vr=vMap.get(cand)||null;
-    const hs=_rankScore(hr,maxRank),vs=_rankScore(vr,maxRank);
-    const consensus=hr!=null&&vr!=null;
-    let rawEvidence=0;
-    if(raw&&raw.length===8){try{const d=candidateDigitsFromRaw(cand,raw);if(d)rawEvidence=0.05;}catch(e){}}
-    const score=0.45*hs+0.45*vs+(consensus?0.08:0)+rawEvidence;
-    return{letters:cand,digits:candidateDigitsFromRaw(cand,raw),finalScore:+score.toFixed(6),harianRank:hr,predV1Rank:vr,harianScore:+hs.toFixed(4),predV1Score:+vs.toFixed(4),consensus,rawEvidence:+rawEvidence.toFixed(4)};
-  }).filter(x=>x.digits).sort((a,b)=>b.finalScore-a.finalScore||a.letters.localeCompare(b.letters));
-  return scored.slice(0,15).map((x,i)=>({...x,rank:i+1}));
-}
-function runPredV3ForSlot(n,dateISO,raw){return _v3Candidates(n,dateISO,raw);}
-function runPredV3Backtest(){
-  const rows=[]; const source=[...(rawLog||[])].filter(r=>r&&r.date&&r.date<todayStr()&&r.raw&&r.raw.length===8&&r.result&&r.result!=='ZONK').sort((a,b)=>String(a.date).localeCompare(String(b.date)));
-  for(const r of source){
-    for(const n of [2,3,4]){
-      if(r.appliedTo&&!r.appliedTo.includes(n))continue;
-      const target=_v2ResultForMode(r.result,n);if(!target)continue;
-      const cand=runPredV3ForSlot(n,r.date,r.raw);const idx=cand.findIndex(x=>x.letters===target);
-      rows.push({date:r.date,session:r.session,slot:r.slot,raw:r.raw,result:r.result,mode:n,candidates:cand,target,rank:idx>=0?idx+1:null,jp:idx>=0});
-    }
-  }
-  const summary={};
-  [2,3,4].forEach(n=>{const a=rows.filter(r=>r.mode===n);const h=a.filter(r=>r.jp);summary[n]={total:a.length,hits:h.length,jpRate:a.length?+(h.length/a.length*100).toFixed(2):0,top3:h.filter(r=>r.rank<=3).length,top5:h.filter(r=>r.rank<=5).length,top10:h.filter(r=>r.rank<=10).length,avgRank:h.length?+(h.reduce((s,r)=>s+r.rank,0)/h.length).toFixed(2):null};});
-  predV3Last={version:PRED_V3_VERSION,calculatedAt:new Date().toISOString(),lastRawDate:getGlobalDataClock().lastRawDate,rows,summary};
-  try{if(typeof SBData!=='undefined'&&SBData.upsertPredV3BacktestAudit){
-    const payload=rows.map(r=>({data_date:r.date,session:r.session||'',slot:r.slot||0,raw:r.raw,result:r.result,candidates4:r.mode===4?r.candidates:[],candidates3:r.mode===3?r.candidates:[],candidates2:r.mode===2?r.candidates:[],metrics:{mode:r.mode,target:r.target,rank:r.rank,jp:r.jp,summary:summary[r.mode]},engine_version:PRED_V3_VERSION}));
-    SBData.upsertPredV3BacktestAudit(payload).catch(()=>{});
-  }}catch(eSaveV3){}
-  renderPredV3(); renderHistoricalSyncPanel(); return predV3Last;
-}
-function renderHistoricalSyncPanel(){
-  const el=$id('historicalSyncPanel');if(!el)return;
-  const r=validateHistoricalAlignment(),c=r.master;
-  const names=['HARIAN','PRED_V1','PRED_V2','KEMBAR','PRED_V3'];
-  el.innerHTML=`<div class="input-section" style="margin:12px 0;border-color:var(--gold)"><div class="input-title" style="color:var(--gold)">🧭 GLOBAL HISTORICAL SYNC</div><div style="font-size:8px;color:var(--dim);line-height:1.45">RAW adalah MASTER TIMELINE. Frontier terakhir RAW: <b style="color:#fff">${c.lastRawDate?isoToDisplay(c.lastRawDate):'-'}</b>. Tab yang tertinggal harus mengejar frontier melalui backfill/reconcile; RAW dan result asli tidak diubah.</div><div style="margin-top:7px">${names.map(n=>{const x=r.targets[n]||{};return `<div style="display:flex;justify-content:space-between;padding:3px 6px;font-size:8px;background:var(--panel2);margin:2px 0;border-radius:4px"><span>${n}</span><span style="color:${x.aligned?'var(--green)':'var(--accent2)'}">${x.lastDate?isoToDisplay(x.lastDate):'belum ada'} ${x.aligned?'✓':'⚠ GAP'}</span></div>`}).join('')}</div><div style="display:flex;gap:6px;margin-top:7px"><button class="btn btn-undo" style="flex:1;color:var(--green);border-color:var(--green)" onclick="runPredV2HistoricalBackfill(true).then(()=>{renderHistoricalSyncPanel();})">🔄 BACKFILL PRED V2</button><button class="btn btn-undo" style="flex:1;color:var(--gold);border-color:var(--gold)" onclick="runPredV3Backtest()">🧪 BACKTEST V3</button></div><div style="font-size:7px;color:var(--dim);margin-top:5px">${r.ok?'🟢 Semua frontier terdeteksi selaras.':'🟡 Ada domain yang tertinggal dari RAW master — gunakan backfill/reconcile.'}</div></div>`;
-}
-function renderPredV3(){
-  const el=$id('predv3-content');if(!el)return;
-  const c=getGlobalDataClock(),s=predV3Last&&predV3Last.summary;
-  const rows=predV3Last&&predV3Last.rows||[];
-  let html=`<div class="gen-box"><div class="uni-title" style="color:#ffb74d">🧬 PRED V3 — FUSION HARIAN + PRED V1</div><div class="uni-sub">Engine baru memakai kandidat fresh dari HARIAN raw-aware + PRED V1 historis. Kandidat lama tidak menjadi input. Ranking dinormalisasi sebelum fusion; consensus dan raw evidence memberi bonus kecil.</div><button class="btn-generate" style="border-color:#ffb74d;color:#ffb74d" onclick="runPredV3Backtest()">🧪 GENERATE / BACKTEST PRED V3</button><div style="font-size:8px;color:var(--gold);margin-top:6px">🗂️ Tombol ini otomatis mencakup seluruh data lampau (backfill+backtest jadi satu) — tidak perlu tombol backfill terpisah.</div><div style="font-size:8px;color:var(--dim);margin-top:6px">RAW MASTER: ${c.lastRawDate?isoToDisplay(c.lastRawDate):'-'} · ${c.totalRawEntries} entri raw.</div></div>`;
-  if(s){html+=`<div class="input-section" style="border-color:#ffb74d"><div class="input-title" style="color:#ffb74d">HASIL BACKTEST V3</div>${[4,3,2].map(n=>{const m=s[n]||{};return `<div style="display:flex;justify-content:space-between;padding:5px 7px;background:var(--panel2);margin:3px 0;border-radius:5px;font-size:9px"><span>${n}D</span><span>${m.hits||0}/${m.total||0} JP · ${m.jpRate||0}%</span><span style="color:var(--dim)">Top3 ${m.top3||0} · Top5 ${m.top5||0} · Top10 ${m.top10||0} · avg# ${m.avgRank??'-'}</span></div>`}).join('')}</div>`;}
-  if(rows.length){const recent=rows.slice(-20).reverse();html+=`<div class="input-section"><div class="input-title">20 HASIL TERBARU</div>${recent.map(r=>`<div style="display:flex;gap:7px;align-items:center;padding:4px 0;border-bottom:1px solid rgba(255,255,255,.04);font-size:8px"><span style="color:var(--dim)">${isoToDisplay(r.date)}</span><span>${r.mode}D</span><b style="color:${r.jp?'var(--green)':'var(--accent2)'}">${r.jp?'JP #'+r.rank:'ZONK'}</b><span style="color:var(--dim)">${r.result}</span></div>`).join('')}</div>`;}
-  el.innerHTML=html;
-}
-
-// ============================================================
-// HARIAN V2 RECALCULATION / BACKTEST (2026-08-28)
-// Tujuan: menguji ENGINE HARIAN V2 TERKINI terhadap RAW + RESULT historis
-// yang tersimpan, TANPA memakai kandidat lama sebagai input/constraint.
-// Kandidat lama hanya arsip. Recalculation ini murni walk-forward:
-// untuk entry tanggal D, scoreCandidatesCombinedAsOf/buildPositionalCandidates
-// hanya boleh melihat histori sampai D. Hasil baru tidak menulis rawLog/state.
-// ============================================================
-let harianRecalcLast=null;
-const HARIAN_RECALC_VERSION='harian-recalc-v1';
-
-function _harianRecalcResultForMode(actual,n){
-  if(!actual||actual==='ZONK')return null;
-  if(!/^[A-H]{2,4}$/.test(actual))return null;
-  if(actual.length===n)return actual;
-  if(actual.length>n)return actual.slice(actual.length-n);
-  return null;
-}
-function _harianRecalcEval(candidates,actual,n){
-  const target=_harianRecalcResultForMode(actual,n);
-  if(!target)return{eligible:false,hit:false,rank:null,target:null};
-  const letters=(candidates||[]).map(c=>c&&c.letters).filter(Boolean);
-  const idx=letters.indexOf(target);
-  return{eligible:true,hit:idx>=0,rank:idx>=0?idx+1:null,target};
-}
-function _harianRecalcEvalKembar(candidates,actual){
-  if(!actual||actual==='ZONK'||!/^[A-H]{4}$/.test(actual))return{eligible:false,hit:false,rank:null};
-  if(new Set(actual).size===4)return{eligible:false,hit:false,rank:null};
-  const list=(candidates||[]).filter(c=>c&&c.letters).map(c=>c.letters);
-  const idx=list.indexOf(actual);
-  return{eligible:true,hit:idx>=0,rank:idx>=0?idx+1:null};
-}
-function _harianRecalcOne(r){
-  const pred=computeSlotPredLocal(r.raw,r.date);
-  const actual=r.result||null;
-  const e4=_harianRecalcEval(pred.cand4,actual,4);
-  const e3=_harianRecalcEval(pred.cand3,actual,3);
-  const e2=_harianRecalcEval(pred.cand2,actual,2);
-  const ek=_harianRecalcEvalKembar(pred.kembar,actual);
-  return{
-    key:`${r.date}|${r.session}|${r.slot}|${r.raw}`,
-    date:r.date,session:r.session,slot:r.slot,raw:r.raw||'',actualResult:actual,
-    engineVersion:pred.engineVersion||'harian-raw-aware-v2',
-    candidates:{cand4:pred.cand4,cand3:pred.cand3,cand2:pred.cand2,kembar:pred.kembar},
-    evaluation:{4:e4,3:e3,2:e2,kembar:ek},
-    recalculatedAt:new Date().toISOString()
-  };
-}
-function _harianRecalcSummarize(rows){
-  const modes={4:{eligible:0,hits:0,ranks:[],top3:0,top5:0,top10:0},3:{eligible:0,hits:0,ranks:[],top3:0,top5:0,top10:0},2:{eligible:0,hits:0,ranks:[],top3:0,top5:0,top10:0},kembar:{eligible:0,hits:0,ranks:[],top3:0,top5:0,top10:0}};
-  rows.forEach(r=>Object.keys(modes).forEach(k=>{const e=r.evaluation[k];if(!e||!e.eligible)return;const m=modes[k];m.eligible++;if(e.hit){m.hits++;m.ranks.push(e.rank);if(e.rank<=3)m.top3++;if(e.rank<=5)m.top5++;if(e.rank<=10)m.top10++;}}));
-  Object.values(modes).forEach(m=>{m.jpRate=m.eligible?+(m.hits/m.eligible*100).toFixed(2):0;m.avgRank=m.ranks.length?+(m.ranks.reduce((a,b)=>a+b,0)/m.ranks.length).toFixed(2):null;});
-  return{totalSlots:rows.length,modes};
-}
-async function runHarianRecalculation(saveRemote=false){
-  const btn=$id('harianRecalcBtn');const status=$id('harianRecalcStatus');
-  if(btn){btn.disabled=true;btn.textContent='⏳ RECALCULATING…';}
-  if(status)status.textContent='Membaca histori RAW + RESULT dan menjalankan HARIAN V2 terbaru secara walk-forward…';
-  try{
-    const source=[...(rawLog||[])].filter(r=>r&&r.date&&r.raw&&r.raw.length===8&&r.result&&r.result!=='ZONK').sort((a,b)=>{
-      const ka=`${a.date}|${HARIAN_SESSION_ORDER[a.session]??9}|${a.slot||0}`;
-      const kb=`${b.date}|${HARIAN_SESSION_ORDER[b.session]??9}|${b.slot||0}`;
-      return ka.localeCompare(kb);
-    });
-    const rows=[];
-    for(const r of source)rows.push(_harianRecalcOne(r));
-    const summary=_harianRecalcSummarize(rows);
-    harianRecalcLast={version:HARIAN_RECALC_VERSION,calculatedAt:new Date().toISOString(),summary,rows};
-    if(saveRemote&&typeof SBData!=='undefined'&&SBData.upsertHarianRecalcAudit){
-      const payload=rows.map(r=>({entry_date:r.date,sess_key:r.session,slot:r.slot,raw:r.raw,actual_result:r.actualResult,engine_version:r.engineVersion,recalc_version:HARIAN_RECALC_VERSION,candidates:r.candidates,comparison:r.evaluation,metrics:{}}));
-      const sr=await SBData.upsertHarianRecalcAudit(payload);
-      if(!sr.ok)throw new Error(sr.reason||'Gagal menyimpan audit recalculation');
-    }
-    renderHarianRecalcBox();
-    if(status)status.textContent=`✓ Selesai · ${rows.length} slot diuji${saveRemote?' · hasil tersimpan ke Supabase':''}`;
-    return harianRecalcLast;
-  }catch(e){
-    if(status)status.textContent='✕ Recalculation gagal: '+String(e&&e.message||e);
-    console.error('[HARIAN RECALC]',e);return null;
-  }finally{if(btn){btn.disabled=false;btn.textContent='🔄 RECALCULATE HARIAN V2';}}
-}
-function _recalcModeLine(label,m){
-  if(!m)return'';
-  return `<div style="display:flex;justify-content:space-between;gap:8px;padding:5px 7px;background:var(--panel2);border-radius:5px;margin:3px 0;font-size:9px"><span style="color:#fff">${label}</span><span style="color:var(--green)">${m.hits}/${m.eligible} JP · ${m.jpRate}%</span><span style="color:var(--dim)">Top3 ${m.top3} · Top5 ${m.top5} · Top10 ${m.top10} · avg# ${m.avgRank??'-'}</span></div>`;
-}
-function renderHarianRecalcBox(){
-  const el=$id('harianRecalcBox');if(!el)return;
-  const s=harianRecalcLast&&harianRecalcLast.summary;
-  el.innerHTML=`<div class="input-section" style="margin:12px 0;border-color:var(--purple)">
-    <div class="input-title" style="color:var(--purple)">🧪 HARIAN V2 RECALCULATION / BACKTEST</div>
-    <div style="font-size:8px;color:var(--dim);line-height:1.45;margin-bottom:8px">Uji kandidat FRESH dari engine HARIAN V2 yang sedang aktif terhadap RAW + RESULT historis. Kandidat lama <b style="color:#fff">tidak dipakai</b> sebagai input. Perhitungan walk-forward mengikuti tanggal masing-masing entry dan tidak mengubah histori asli.</div>
-    <div style="display:flex;gap:6px;flex-wrap:wrap">
-      <button id="harianRecalcBtn" class="btn btn-undo" style="flex:1;min-width:180px;border-color:var(--purple);color:var(--purple)" onclick="runHarianRecalculation(false)">🔄 RECALCULATE HARIAN V2</button>
-      <button class="btn btn-undo" style="flex:1;min-width:180px" onclick="runHarianRecalculation(true)">💾 RECALC + SIMPAN SUPABASE</button>
-    </div>
-    <div id="harianRecalcStatus" style="font-size:8px;color:var(--dim);margin-top:6px">${s?`Terakhir: ${new Date(harianRecalcLast.calculatedAt).toLocaleString('id-ID')} · ${s.totalSlots} slot`:'Belum dijalankan.'}</div>
-    ${s?`<div style="margin-top:8px;font-size:8px;color:var(--gold);letter-spacing:1px">HASIL ENGINE BARU</div>${_recalcModeLine('4D',s.modes[4])}${_recalcModeLine('3D',s.modes[3])}${_recalcModeLine('2D',s.modes[2])}${_recalcModeLine('KEMBAR',s.modes.kembar)}<div style="font-size:7px;color:var(--dim);margin-top:5px">JP Rate = result aktual masuk kandidat engine baru. Rank dihitung hanya untuk hit. Kandidat lama tidak digunakan.</div>`:''}
-  </div>`;
-}
-
-let harianLogPage=0;
-const HARIAN_LOG_PAGE_SIZE=20;
-function harianLogGoPage(p){harianLogPage=p;renderHarianLog();}
-function renderHarianLog(){
-  const el=$id('harianLogList');if(!el)return;
-  const pagerEl=$id('harianLogPager');
-  if(!rawLog.length){el.innerHTML='<div style="font-size:10px;color:var(--dim);text-align:center;padding:10px">Belum ada riwayat.</div>';if(pagerEl)pagerEl.innerHTML='';return;}
-  const sorted=[...rawLog].sort((a,b)=>{
-    if(a.date!==b.date)return (b.date||'').localeCompare(a.date||''); // tanggal terbaru dulu
-    const so=(HARIAN_SESSION_ORDER[a.session]??9)-(HARIAN_SESSION_ORDER[b.session]??9);
-    if(so!==0)return so; // urutan sesi tetap 14.30 → 18.30 → 23.00
-    return (a.slot||0)-(b.slot||0);
-  });
-  const totalPages=Math.max(1,Math.ceil(sorted.length/HARIAN_LOG_PAGE_SIZE));
-  if(harianLogPage>=totalPages)harianLogPage=totalPages-1;
-  if(harianLogPage<0)harianLogPage=0;
-  const startIdx=harianLogPage*HARIAN_LOG_PAGE_SIZE;
-  const recent=sorted.slice(startIdx,startIdx+HARIAN_LOG_PAGE_SIZE);
-  // Rekap seberapa sering slot 1 & slot 2 (sesi yang sama) memang saling
-  // cocok — mendukung analisa "data mentah slot 1 sering keluar di result
-  // slot 2 (dan sebaliknya)". Dihitung dari SELURUH riwayat, bukan cuma 1 halaman.
-  const eligible=sorted.filter(r=>r.crossSlot!==undefined&&r.sessSlots>1);
-  const crossCount=eligible.filter(r=>r.crossSlot).length;
-  const crossPct=eligible.length?Math.round(crossCount/eligible.length*100):0;
-  const statLine=eligible.length?`<div style="font-size:9px;color:var(--gold);text-align:center;padding:4px 0 8px">🔗 Lintas-slot: ${crossCount}/${eligible.length} entri (${crossPct}%) cocok pakai data mentah slot pasangannya · total ${sorted.length} entri</div>`:`<div style="font-size:9px;color:var(--dim);text-align:center;padding:4px 0 8px">total ${sorted.length} entri</div>`;
-  el.innerHTML=statLine+recent.map(r=>{
-    const zonk=r.result==='ZONK';
-    const unclassified=Array.isArray(r.appliedTo)&&r.appliedTo.includes('TAK-TERKLASIFIKASI');
-    const color=zonk?'var(--accent2)':unclassified?'var(--orange)':'var(--green)';
-    const applied=r.appliedTo&&r.appliedTo.length?r.appliedTo.map(n=>{
-      if(typeof n==='number')return n+'H';
-      if(n==='TAK-TERKLASIFIKASI')return'⚠ tak diklasifikasi';
-      if(typeof n==='string'&&n.startsWith('KEMBAR-PARSIAL-'))return'→ Kembar parsial '+n.replace('KEMBAR-PARSIAL-','');
-      return n;
-    }).join('+'):'-';
-    const traceDetail=(r.resultTrace&&r.resultTrace.length)?r.resultTrace.map(t=>`${t.digit}→${t.letter}(pos${t.rawPos})`).join(' '):'';
-    const crossTag=r.crossSlot?`<span style="color:var(--gold);white-space:nowrap">🔗S${(r.crossSources||[]).join('/')}</span>`:'';
-    const sourceLabel=r.resultSourceSlot?`sumber: raw SLOT ${r.resultSourceSlot}${r.resultSource==='neighbor'?' (tetangga)':' (sendiri)'} · match ${r.resultMatchCount}/4`:'';
-    const traceLine=traceDetail?`<div style="font-size:8px;color:var(--dim);margin-top:3px;letter-spacing:0.5px">${r.resultDigits||''} → ${traceDetail}${sourceLabel?' · '+sourceLabel:''}</div>`:'';
-    const zonkReasonLine=r.resultAutoReason?`<div style="font-size:8px;color:var(--red);margin-top:3px">${r.resultAutoReason}</div>`:'';
-    const origIdx=rawLog.indexOf(r);
-    const canJejak=r.raw&&r.raw.length===8&&r.result&&r.result!=='ZONK';
-    const jejakBtn=canJejak?`<button onclick="toggleJejakPola(${origIdx})" style="background:none;border:1px solid var(--dim2);color:var(--purple);font-size:7px;letter-spacing:0.5px;border-radius:4px;padding:1px 5px;cursor:pointer;flex-shrink:0" title="Analisa raw & result vs kandidat engine">▸ Jejak Pola</button>`:'';
-    return `<div style="display:flex;flex-direction:column;gap:2px;font-size:9px;padding:6px 8px;background:var(--panel2);border-radius:6px;margin-bottom:4px;border-left:3px solid ${color}">
-      <div style="display:flex;justify-content:space-between;gap:6px;overflow-x:auto">
-        <span style="color:var(--dim);white-space:nowrap">${r.ts} · ${r.session} · slot${r.slot||1}</span>
-        <span style="color:#fff;letter-spacing:1px;white-space:nowrap">${r.raw||'-'}</span>
-        <span style="color:${color};font-weight:700;white-space:nowrap">${r.result||'-'}</span>
-        ${crossTag}
-        <span style="color:var(--dim);white-space:nowrap">${applied}</span>
-        <button onclick="deleteHarianLogEntry(${origIdx})" style="background:none;border:none;color:var(--red);font-size:11px;cursor:pointer;padding:0 2px;flex-shrink:0" title="Hapus entri ini">🗑</button>
-      </div>
-      ${traceLine}
-      ${zonkReasonLine}
-      ${jejakBtn?`<div style="margin-top:2px">${jejakBtn}</div><div id="jejakPola_${origIdx}" style="display:none;background:var(--panel);border-radius:6px;margin-top:2px"></div>`:''}
-    </div>`;
-  }).join('');
-
-  if(pagerEl){
-    if(totalPages<=1){pagerEl.innerHTML='';}
-    else{
-      pagerEl.innerHTML=`
-        <button class="btn btn-undo" style="padding:4px 10px;font-size:10px" ${harianLogPage<=0?'disabled':''} onclick="harianLogGoPage(${harianLogPage-1})">‹ Prev</button>
-        <span style="font-size:10px;color:var(--dim)">Hal ${harianLogPage+1} / ${totalPages}</span>
-        <button class="btn btn-undo" style="padding:4px 10px;font-size:10px" ${harianLogPage>=totalPages-1?'disabled':''} onclick="harianLogGoPage(${harianLogPage+1})">Next ›</button>`;
-    }
-  }
-}
-
-// Hapus satu entri Riwayat Harian (by index asli di rawLog) — membatalkan
-// dulu semua efeknya di pool 2H/3H/4H/Kembar via reverseHarianEntry, baru
-// menghapus baris log-nya sendiri. Dipakai untuk koreksi input yang salah.
-// SINKRONISASI harianPredGenLog <-> rawLog (2026-08-28, perbaikan additive):
-// harianPredGenLog dicatat TERPISAH dari rawLog (lihat _logHarianPredGen),
-// jadi kalau entri Harian dihapus/diganti tapi harianPredGenLog tidak ikut
-// dibersihkan, RIWAYAT LENGKAP di PRED V1/V2 (sumbernya harianPredGenLog)
-// bisa menampilkan entri yang sudah tidak ada lagi di RIWAYAT HARIAN
-// (sumbernya rawLog). Helper ini membuang entri harianPredGenLog untuk
-// kombinasi tanggal+sesi+slot tertentu (raw APAPUN -- cuma boleh ada 1
-// entri hidup per slot per tanggal), dipanggil dari titik hapus & ganti.
-function _removeHarianPredGenEntriesFor(dateISO,sessKey,slot){
-  try{
-    if(!harianPredGenLog||!harianPredGenLog.length)return 0;
-    const before=harianPredGenLog.length;
-    harianPredGenLog=harianPredGenLog.filter(e=>!(e.dateISO===dateISO&&e.sessKey===sessKey&&e.slot===slot));
-    const removed=before-harianPredGenLog.length;
-    if(removed)saveHarianPredGenLog();
-    return removed;
-  }catch(e){return 0;}
-}
-function _sessKeyFromLabel(label){
-  const s=HARIAN_SESSIONS.find(x=>x.label===label);
-  return s?s.key:label;
-}
-// Rekonsiliasi sekali-jalan: buang SEMUA entri harianPredGenLog yang sudah
-// yatim (tanggal+sesi+slot-nya sudah tidak ada lagi di rawLog saat ini) --
-// utk membersihkan data lama yang terlanjur desync SEBELUM perbaikan ini
-// ada. rawLog tidak disentuh sama sekali (searah, harianPredGenLog yang
-// menyesuaikan ke rawLog, bukan sebaliknya).
-function syncHarianPredGenLogWithRawLog(){
-  if(!harianPredGenLog||!harianPredGenLog.length)return 0;
-  const liveKeys=new Set(rawLog.filter(r=>r.raw).map(r=>r.date+'|'+_sessKeyFromLabel(r.session)+'|'+(r.slot||1)));
-  const before=harianPredGenLog.length;
-  harianPredGenLog=harianPredGenLog.filter(e=>liveKeys.has(e.dateISO+'|'+e.sessKey+'|'+e.slot));
-  const removed=before-harianPredGenLog.length;
-  if(removed)saveHarianPredGenLog();
-  return removed;
-}
-function handleSyncHarianPredGenLog(btnId){
-  const removed=syncHarianPredGenLogWithRawLog();
-  const btn=$id(btnId);
-  if(btn){
-    const orig=btn.textContent;
-    btn.textContent=removed>0?`✓ ${removed} entri yatim dibuang`:'✓ Sudah sinkron, tidak ada yang yatim';
-    setTimeout(()=>{btn.textContent=orig;},3000);
-  }
-  try{renderPred(2);renderPred(3);renderPred(4);renderPredV2(activePredSubV2);}catch(e){}
-}
-
-function deleteHarianLogEntry(idx){
-  const entry=rawLog[idx];
-  if(!entry)return;
-  const label=`${entry.ts||''} · ${entry.session||''} · slot${entry.slot||1} · ${entry.raw||'-'}`;
-  if(!confirm(`Hapus entri ini beserta efeknya di pool (2H/3H/4H/Kembar)?\n\n${label}\n\nTindakan ini tidak bisa di-undo.`))return;
-  try{reverseHarianEntry(entry);}catch(e){}
-  markRawLogDeleted(entry);
-  rawLog.splice(idx,1);
-  try{_removeHarianPredGenEntriesFor(entry.date,_sessKeyFromLabel(entry.session),entry.slot||1);}catch(eSync){}
-  saveRawLog();
-  renderHarianLog();
-  try{renderAll(2);renderAll(3);renderAll(4);renderNotifBanner();renderDash();}catch(e){}
-}
-
-function submitHarian(){
-  const dInp=$id('harianDate');
-  const dateISO=dInp&&dInp.value?dInp.value:todayISO();
-  let savedCount=0,zonkCount=0,errCount=0,replacedCount=0,unclassifiedCount=0;
-  const errorsBySession={};
-
-  HARIAN_SESSIONS.forEach(sess=>{
-    // Kumpulkan dulu data mentah SEMUA slot di sesi ini — supaya slot 1 & slot 2
-    // saling terhubung sebagai bahan cocok-angka (verifikasi & auto-derive Result).
-    const sessRaws=[];
-    for(let s=1;s<=sess.slots;s++){
-      const el=$id(harianRowId(sess.key,s,'raw'));
-      sessRaws.push({slot:s,digits:el?el.value.trim():''});
-    }
-    for(let slot=1;slot<=sess.slots;slot++){
-      const rawEl=$id(harianRowId(sess.key,slot,'raw'));
-      const resEl=$id(harianRowId(sess.key,slot,'result'));
-      const raw=rawEl?rawEl.value.trim():'';
-      const resultRaw=resEl?resEl.value.trim():'';
-      if(!raw&&!resultRaw)continue; // baris kosong, lewati
-
-      // Prioritas cocok-angka: raw slot ini sendiri dulu, baru raw slot pasangan
-      // lain di sesi yang sama (inilah koneksi slot 1 <-> slot 2).
-      const rawList=[{slot,digits:raw},...sessRaws.filter(r=>r.slot!==slot)];
-
-      let resultVal='',appliedTo=[],isZonk=false,resultKembarType=null,resultTrace=null,resultMatchCount=null,resultSource=null,resultSourceSlot=null,resultAutoReason=null,resultUnclassified=false;
-      if(resultRaw){
-        const v=validResultInput(resultRaw,rawList,slot);
-        if(!v.ok&&!v.unclassified){
-          (errorsBySession[sess.key]=errorsBySession[sess.key]||[]).push(`Slot ${slot} (${resultRaw}): ${v.reason}`);
-          errCount++;
-          if(resEl){resEl.className='letter-input harian-result error';setTimeout(()=>{if(resEl)resEl.className='letter-input harian-result';},1200);}
-          continue;
-        }
-        resultVal=v.val;
-        isZonk=v.zonk||false;
-        resultUnclassified=!!v.unclassified;
-        resultKembarType=v.kembarType||null;
-        resultTrace=v.trace||null;
-        resultMatchCount=v.matchCount||null;
-        resultSource=v.source||null;
-        resultSourceSlot=v.sourceSlot||null;
-        resultAutoReason=resultUnclassified?v.reason:(v.auto?v.reason:null);
-      }
-
-      // Tandai baris ini kalau minimal satu huruf di Result cocok lewat data
-      // mentah slot PASANGAN, bukan slot sendiri — inilah bukti nyata slot 1 & 2
-      // saling verifikasi (dipakai buat rekap statistik lintas-slot).
-      const crossSlot=resultTrace?resultTrace.some(t=>t.cross):false;
-      const crossSources=new Set();
-      if(resultTrace)resultTrace.forEach(t=>{if(t.cross)crossSources.add(t.slot);});
-
-      if(raw&&raw.length!==8){
-        (errorsBySession[sess.key]=errorsBySession[sess.key]||[]).push(`Slot ${slot}: data mentah sebaiknya 8 digit (kamu isi ${raw.length})`);
-        if(rawEl){rawEl.className='letter-input harian-raw error';setTimeout(()=>{if(rawEl)rawEl.className='letter-input harian-raw';},1200);}
-      }
-
-      // Sesi (misal 18.30) cuma boleh 1x result per tanggal — kalau sudah ada
-      // entry untuk tanggal+sesi+slot yang sama, batalkan dulu efek lamanya
-      // (hapus dari pool normal/Kembar) sebelum entry baru menggantikannya.
-      const existingIdx=rawLog.findIndex(r=>r.date===dateISO&&r.session===sess.label&&r.slot===slot);
-      if(existingIdx>=0){
-        reverseHarianEntry(rawLog[existingIdx]);
-        rawLog.splice(existingIdx,1);
-        try{_removeHarianPredGenEntriesFor(dateISO,sess.key,slot);}catch(eSync){}
-        replacedCount++;
-      }
-
-      const insertedRecs=[];
-      if(resultUnclassified){
-        appliedTo.push('TAK-TERKLASIFIKASI');
-        const gType=kmbGuaranteedType(resultVal);
-        if(gType){
-          const pattern='_'.repeat(4-resultVal.length)+resultVal;
-          kmbPushPartial({pattern,guaranteedType:gType,knownLetters:resultVal,date:dateISO,ts:isoToDisplay(dateISO),session:sess.label,slot,matchCount:resultVal.length});
-          appliedTo.push('KEMBAR-PARSIAL-'+gType);
-          insertedRecs.push({store:'partial',pattern,d:dateISO});
-        }
-      }else if(resultVal&&!isZonk){
-        if(resultKembarType){
-          // Hasil kembar (ada huruf berulang) — masuk ke tab Kembar, bukan pool 2H/3H/4H normal.
-          // Kembar & normal tetap 1 sumber data yang sama untuk analisa/prediksi (Oracle baca keduanya).
-          kmbPushUndo(resultKembarType);
-          insertKembarSorted(resultKembarType,resultVal,dateISO);
-          appliedTo.push('KEMBAR-'+resultKembarType);
-          insertedRecs.push({store:'kembar',type:resultKembarType,v:resultVal,d:dateISO});
-        }else{
-          // Cascade otomatis 4H → 3H → 2H (ambil suffix)
-          [2,3,4].forEach(n=>{undoStack[n].push(_cloneStateArr(state[n]));if(undoStack[n].length>10)undoStack[n].shift();});
-          if(resultVal.length===4){
-            insertEntrySorted(state[4],{v:resultVal},dateISO);appliedTo.push(4);insertedRecs.push({store:'normal',n:4,v:resultVal,d:dateISO});
-            const r3=resultVal.slice(1);insertEntrySorted(state[3],{v:r3},dateISO);appliedTo.push(3);insertedRecs.push({store:'normal',n:3,v:r3,d:dateISO});
-            const r2=resultVal.slice(2);insertEntrySorted(state[2],{v:r2},dateISO);appliedTo.push(2);insertedRecs.push({store:'normal',n:2,v:r2,d:dateISO});
-          }else if(resultVal.length===3){
-            insertEntrySorted(state[3],{v:resultVal},dateISO);appliedTo.push(3);insertedRecs.push({store:'normal',n:3,v:resultVal,d:dateISO});
-            const r2=resultVal.slice(1);insertEntrySorted(state[2],{v:r2},dateISO);appliedTo.push(2);insertedRecs.push({store:'normal',n:2,v:r2,d:dateISO});
-          }else if(resultVal.length===2){
-            insertEntrySorted(state[2],{v:resultVal},dateISO);appliedTo.push(2);insertedRecs.push({store:'normal',n:2,v:resultVal,d:dateISO});
-          }
-          saveData(2,state[2]);saveData(3,state[3]);saveData(4,state[4]);
-          // BUGFIX 2026-08 (temuan audit): sebelumnya updateMetaLearning()
-          // -- Layer 5, kalibrasi adaptif bobot faktor scoring per mode/
-          // regime -- HANYA dipanggil dari submitResult()/submitResultKmb()
-          // (alur tab PRED/KEMBAR). Alur HARIAN ini (yg jadi cara utama user
-          // input result sehari-hari, cascade ke state[2/3/4] di atas) TIDAK
-          // PERNAH memicunya -- akibatnya kalibrasi adaptif tidak pernah
-          // dapat umpan balik sama sekali dari result asli yg masuk lewat
-          // sini, walau datanya (state[n]) sendiri sudah bertambah. Sekarang
-          // disambungkan, scoped ke mode yg benar2 dapat entri baru di slot
-          // ini (appliedTo) -- idempoten by design (updateMetaLearning cek
-          // fingerprint dulu, jadi aman dipanggil berulang tanpa biaya kalau
-          // datanya kebetulan tidak berubah).
-          appliedTo.forEach(n=>{try{updateMetaLearning(n);}catch(eMeta){}});
-        }
-      }
-
-      // Ambil arsip PRED & AI PRED kolom ini (dari harianSlotState) KALAU
-      // raw yang tersimpan di sana masih sama persis dengan raw yang disubmit
-      // sekarang — supaya RIWAYAT LENGKAP bisa catat pasangan lengkap
-      // raw+PRED+AI PRED+result per entri (bukan cuma raw+result).
-      let predSnapshot=null,aiSnapshot=null;
-      if(raw&&raw.length===8){
-        const slotSt=harianSlotState[slotKey(sess.key,slot)];
-        if(slotSt&&slotSt.raw===raw){
-          if(slotSt.pred)predSnapshot={cand4:(slotSt.pred.cand4||[]).slice(0,10),cand3:(slotSt.pred.cand3||[]).slice(0,10),cand2:(slotSt.pred.cand2||[]).slice(0,10),kembar:(slotSt.pred.kembar||[]).slice(0,12)};
-          if(slotSt.ai)aiSnapshot={text:slotSt.ai.text,ts:slotSt.ai.ts};
-        }
-      }
-
-      rawLog.push({date:dateISO,session:sess.label,slot,raw,result:resultVal||'',appliedTo,ts:isoToDisplay(dateISO),inserted:insertedRecs,crossSlot,crossSources:[...crossSources],sessSlots:sess.slots,resultDigits:resultRaw&&resultRaw!=='ZONK'?resultRaw:'',resultTrace:resultTrace||null,resultMatchCount,resultSource,resultSourceSlot,resultAutoReason,predSnapshot,aiSnapshot});
-      // Request 2026-08: cocokkan prediksi posisi pola huruf (dicatat di
-      // harianPredGenLog saat raw diketik) vs posisi aktual (resultTrace di
-      // atas) -- HANYA kalau raw-nya genap 8 digit (posisi 1-8 baru valid
-      // dianalisa dgn raw lengkap).
-      if(raw&&raw.length===8&&resultTrace&&resultTrace.length){
-        _recordPosMatchAudit(dateISO,sess.key,slot,raw,resultVal,resultTrace,resultRaw&&resultRaw!=='ZONK'?resultRaw:null);
-      }
-      // Isi otomatis predSlotLog (mesin PRED sendiri) dgn result asli --
-      // TIDAK perlu user re-ketik manual lagi ke kotak "MASUKKAN RESULT
-      // AKTUAL" di PRED lama. Cukup syaratnya resultVal berupa huruf valid
-      // (bukan ZONK/kosong).
-      if(resultVal)try{_fillPredSlotResult(dateISO,sess.key,slot,resultVal,sess.slots);}catch(eFPS){}
-      if(resultVal)try{_fillPredSlotResultV2(dateISO,sess.key,slot,resultVal,sess.slots);}catch(eFPS2){}
-      // Isi ulang entri posCandGenLog yang sama (kalau ada) dengan result
-      // aktual + audit hit -- syaratnya cuma raw genap 8 digit & ada result
-      // yang benar2 disubmit (termasuk ZONK/tak-terklasifikasi, TIDAK
-      // mensyaratkan resultTrace spt _recordPosMatchAudit di atas, krn di
-      // sini yang dicek cuma "apakah result ada di 20-list", bukan posisi).
-      if(raw&&raw.length===8&&(resultVal||isZonk||resultUnclassified)){
-        _recordPosCandAudit(dateISO,sess.key,slot,raw,resultVal,resultKembarType,isZonk,resultUnclassified);
-      }
-      savedCount++;
-      if(isZonk)zonkCount++;
-      if(resultUnclassified)unclassifiedCount++;
-
-      if(rawEl)rawEl.value='';
-      if(resEl)resEl.value='';
-    }
-  });
-
-  saveRawLog();
-  harianLogPage=0;
-  hariLengkapPage=0;
-  // Request 2026-08: setelah SIMPAN, pool 2H/3H/4H/Kembar sudah berisi data
-  // asli hari ini -- refresh tab PRED pakai pool terbaru itu (force=true),
-  // supaya kandidat yang "dikunci" utk hari ini benar2 versi final, bukan
-  // cuma preview dari sebelum result masuk. Tetap tidak menimpa kalau
-  // sudah ada result asli yang disubmit lewat tab PRED/KEMBAR sendiri hari
-  // ini (lihat guard di dalam generatePred/generatePredKmb).
-  [2,3,4].forEach(n=>{try{generatePred(n,true);}catch(e){}});
-  try{generatePredKmb(true);}catch(e){}
-  // Auto-trigger 2026-08: cek apakah kasus tervalidasi baru sudah cukup
-  // (>=AUTO_AUDIT_NEW_CASES_THRESHOLD) utk memicu Audit Oracle sendiri --
-  // fire-and-forget, tidak menahan render/alur submit di bawah ini.
-  _maybeAutoRunAudit();
-  renderAll(2);renderAll(3);renderAll(4);renderNotifBanner();renderDash();
-  if(typeof renderKembarAll==='function')renderKembarAll();
-  renderHarianLog();
-  if(typeof renderHariHist==='function')renderHariHist();
-  if(typeof renderHariLengkap==='function')renderHariLengkap();
-  HARIAN_SESSIONS.forEach(sess=>{if(harianPredOpen[sess.key])renderHarianPredBox(sess.key);});
-
-  // Bersihkan semua pesan sesi dulu, lalu tampilkan error tepat di sesi yang bermasalah
-  HARIAN_SESSIONS.forEach(sess=>{
-    const msgEl=$id('harianMsg'+sess.key);
-    if(!msgEl)return;
-    if(errorsBySession[sess.key]){
-      msgEl.textContent='⚠ '+errorsBySession[sess.key].join(' · ');
-      msgEl.className='msg show err';
-    }else{
-      msgEl.className='msg';
-    }
-  });
-
-  if(savedCount>0){
-    uniShowMsgGeneric(`✓ ${savedCount} baris tersimpan${replacedCount?` (${replacedCount} menggantikan entry lama di sesi yang sama)`:''} (${zonkCount} ZONK di-skip dari histori${unclassifiedCount?`, ${unclassifiedCount} tak terklasifikasi (tersimpan di riwayat, tidak masuk pool manapun)`:''})${errCount?`, ${errCount} baris error dilewati`:''}`);
-  }else if(!errCount){
-    uniShowMsgGeneric('Tidak ada baris yang diisi.');
-  }
-}
-
-function uniShowMsgGeneric(text){
-  // Pesan ringkas pakai alert non-blocking sederhana lewat msg sesi pertama
-  const el=$id('harianMsg1430');
-  if(el){el.textContent=text;el.className='msg show ok';clearTimeout(el._t);el._t=setTimeout(()=>{el.className='msg';},4500);}
-}
-
-// ============================================================
-// STORAGE ADAPTER — localStorage murni (window.storage/cloud DIPUTUSKAN
-// sesuai permintaan — fitur ini sudah tidak dipakai lagi). Semua data
-// tersimpan di localStorage browser dan di-mirror ke cache in-memory
-// supaya kode lama (yang menulis akses sync) tetap jalan tanpa
-// perlu diubah satu-satu jadi async/await.
-// ============================================================
-// ============================================================
-// EMBEDDED BACKUP SEED — snapshot Backup Lengkap tanggal 2026-07-20
-// (diberikan Milo lewat chat, export jam 06:43 UTC). Dipakai untuk
-// mengisi tracker secara otomatis KALAU environment/browser ini masih
-// kosong (belum pernah ada data tersimpan) — supaya begitu file HTML
-// ini dibuka pertama kali di device/session baru, seluruh riwayat s/d
-// 18 Juli 2026 (termasuk draft raw 20 Juli) sudah langsung ada tanpa
-// perlu import manual. TIDAK PERNAH menimpa data yang sudah ada di
-// tracker ini — cek _seedFromBackupIfEmpty() di bawah.
-//
-// [2026-08] DIKOSONGKAN PERMANEN sesuai keputusan reset total — data
-// s/d 18 Juli 2026 sudah dihapus dari sini. Mulai sekarang, sumber
-// kebenaran tunggal adalah Supabase (lihat AHSyncEngine di bawah);
-// _seedFromBackupIfEmpty() tetap ada sebagai mekanisme (jaga-jaga utk
-// device baru yg offline sebelum sempat sync), tapi karena objek ini
-// kosong, fungsi itu sekarang jadi no-op — tidak menanam data apa pun.
-// ============================================================
-const EMBEDDED_BACKUP_SEED={};
-
-const _storeCache={};
-let _storageReady=false;
-let _storagePendingWrites=0;
-
-async function _storageBootstrap(){
-  // Muat semua yang ada di localStorage ke cache in-memory. Window.storage
-  // (cloud) sudah diputuskan dari file ini — localStorage adalah SATU-
-  // SATUNYA sumber data sekarang, tidak ada lagi overlay dari server.
-  try{
-    for(let i=0;i<localStorage.length;i++){
-      const k=localStorage.key(i);
-      if(k)_storeCache[k]=localStorage.getItem(k);
-    }
-  }catch(e){/* localStorage tidak tersedia, lanjut dengan cache kosong */}
-  _seedFromBackupIfEmpty();
-  _storageReady=true;
-}
-
-// Kalau environment ini masih kosong sama sekali (belum pernah ada
-// tah2_rawlog tersimpan — penanda paling andal karena selalu terisi
-// begitu ada input HARIAN pertama), isi otomatis dari EMBEDDED_BACKUP_SEED
-// supaya riwayat s/d 18 Juli 2026 langsung tersedia. Kalau tracker ini
-// sudah pernah dipakai dan sudah punya rawlog sendiri, fungsi ini TIDAK
-// melakukan apa-apa — data yang ada sekarang tidak pernah ditimpa.
-//
-// BUGFIX: cek lama `!!lsGet('tah2_rawlog')` adalah truthy-check pada STRING
-// mentah -- string "[]" (array kosong yg sudah pernah ke-serialize/tersimpan
-// dari environment/localStorage sebelumnya) tetap truthy, jadi dianggap
-// "sudah ada data" walau isinya sebenarnya kosong -- akibatnya seed dari
-// EMBEDDED_BACKUP_SEED tidak pernah jalan dan tab RIWAYAT HARIAN/RIWAYAT
-// LENGKAP permanen kosong. Sekarang dicek isi JSON-nya, bukan sekadar ada/
-// tidaknya string.
-//   - key tidak ada / JSON valid array [] -> dianggap KOSONG -> boleh diisi.
-//   - JSON tidak valid (korup) -> JANGAN disentuh di sini sama sekali;
-//     biarkan _detectCorruptCriticalKeys()/Recovery Mode yg sudah berjalan
-//     terpisah di boot() (setelah fungsi ini) yg menangani sesuai mekanisme
-//     yg sudah ada -- fungsi ini tidak boleh diam2 menimpa data korup.
-//   - JSON valid & berisi -> sudah ada data asli user -> JANGAN disentuh.
-function _rawlogEmptinessState(){
-  const raw=lsGet('tah2_rawlog');
-  if(raw===null||raw===undefined)return'missing';
-  let parsed;
-  try{parsed=JSON.parse(raw);}catch(e){return'invalid_json';}
-  if(Array.isArray(parsed))return parsed.length===0?'empty_array':'has_data';
-  return'has_data'; // bentuk tak terduga (bukan array) -- aman: jangan disentuh
-}
-// Cek terpisah: apakah data UTAMA (tah2_data_2/3/4, dipakai Prediction
-// Engine/Oracle/dll) sudah punya histori asli. Dipakai HANYA utk memutuskan
-// scope seed (penuh vs domain rawlog saja) -- tidak pernah menulis ke key
-// ini dari fungsi manapun di bawah.
-function _mainDataHasHistory(){
-  return[2,3,4].some(n=>{
-    const raw=lsGet('tah2_data_'+n);
-    if(!raw)return false;
-    try{const p=JSON.parse(raw);return Array.isArray(p)&&p.length>0;}catch(e){return false;} // JSON korup di sini bukan tanggung jawab fungsi ini -- _detectCorruptCriticalKeys() yg menangani
-  });
-}
-function _seedFromBackupIfEmpty(){
-  try{
-    const rawlogState=_rawlogEmptinessState();
-    if(rawlogState==='has_data'||rawlogState==='invalid_json')return;
-    if(_mainDataHasHistory()){
-      // Data utama (tah2_data_2/3/4) SUDAH berisi histori asli milik user
-      // -- domain itu TIDAK BOLEH disentuh. Pulihkan HANYA domain
-      // tah2_rawlog dari embedded backup (sesuai desain backup: rawlog
-      // adalah domain terpisah, murni log input HARIAN, tidak menimbulkan
-      // duplikasi di tah2_data_n krn tidak ditulis balik ke sana).
-      if('tah2_rawlog' in EMBEDDED_BACKUP_SEED){
-        lsSet('tah2_rawlog',EMBEDDED_BACKUP_SEED['tah2_rawlog']);
-      }
-      _justSeededFromBackup='rawlog_only';
-      return;
-    }
-    // Environment benar2 kosong sama sekali (belum pernah dipakai sama
-    // sekali) -- seed penuh spt semula, seluruh domain di EMBEDDED_BACKUP_SEED.
-    Object.keys(EMBEDDED_BACKUP_SEED).forEach(k=>{
-      lsSet(k,EMBEDDED_BACKUP_SEED[k]);
-    });
-    _justSeededFromBackup=true;
-  }catch(e){/* gagal seed — tracker tetap jalan dengan BASE_INIT kosong seperti biasa */}
-}
-let _justSeededFromBackup=false;
-
-// Baca cache (sync) — dipanggil oleh semua fungsi load*() yang sudah ada
-function lsGet(key){
-  return (key in _storeCache)?_storeCache[key]:null;
-}
-
-// Tulis: update cache + localStorage SELALU (localStorage sekarang
-// SATU-SATUNYA backend persisten — window.storage sudah diputuskan/
-// dihapus dari file ini sesuai permintaan).
-const _pendingSaves=new Set(); // dipertahankan kosong selamanya — tidak ada lagi write async ke cloud yang perlu ditunggu
-let _localStorageOverflowed=false;
-
-// ============================================================
-// SAVE QUEUE (Audit Prioritas #5) — banyak lsSet() dalam waktu singkat
-// (mis. restore/import banyak key sekaligus, atau beberapa saveXxx()
-// terpanggil berturut-turut dalam satu aksi user) digabung jadi SATU
-// commit batch, didebounce ~75ms, alih-alih menembak localStorage.setItem
-// satu-satu per key secara terpisah.
-//
-// Cache in-memory (_storeCache) tetap di-update SYNCHRONOUS di dalam
-// lsSet() itu sendiri, jadi lsGet() membaca balik nilai terbaru kapan pun
-// — yang didebounce HANYA persistensinya ke localStorage.
-//
-// Batch commit ini juga sekaligus jadi STORAGE TRANSACTION (Audit
-// Prioritas #2): sebelum batch benar-benar ditulis, journal
-// tah2_tx_journal dicatat lebih dulu berisi status BEGIN + nilai LAMA tiap
-// key (untuk rollback) + nilai BARU tiap key (untuk deteksi "sudah
-// ter-commit sampai mana"). Kalau browser crash persis di tengah batch
-// (mis. baru sempat menulis key pertama dari tiga), startup berikutnya
-// (checkTxJournalOnBoot) mendeteksi journal masih BEGIN dan menawarkan
-// ROLLBACK ke nilai lama atau LANJUT dengan apa yang sempat ter-commit.
-// ============================================================
-const _saveQueue=new Map();       // key -> value BARU yang menunggu commit
-const _saveQueueOldValues=new Map(); // key -> value LAMA (persisted) sebelum batch ini mulai
-let _saveQueueTimer=null;
-const SAVE_QUEUE_DEBOUNCE_MS=75;
-const TX_JOURNAL_KEY='tah2_tx_journal';
-
-// Tulis SEGERA, bypass save queue (dipakai HANYA untuk penanda journal
-// crash-safety seperti tah2_restore_journal, yang justru harus tertulis
-// synchronous SEBELUM commit berisiko berikutnya jalan — kalau ini ikut
-// didebounce, jendela crash 75ms bisa membuat journal-nya sendiri belum
-// sempat tertulis pas browser mati, menggagalkan seluruh tujuan proteksi
-// journal tsb).
-function lsSetImmediate(key,value){
-  _storeCache[key]=value;
-  try{
-    localStorage.setItem(key,value);
-    if(_localStorageOverflowed){_localStorageOverflowed=false;}
-  }catch(e){
-    _localStorageOverflowed=true;
-  }
-  updateSaveIndicator();
-}
-
-function lsSet(key,value){
-  // Performance (Audit Prioritas #4): kalau nilai persis SAMA dengan yang
-  // sudah tercatat di cache, tidak perlu menulis ulang — mengurangi I/O
-  // storage yang sia-sia saat render/save dipanggil berulang tanpa
-  // perubahan data nyata. TIDAK di-skip kalau localStorage sedang overflow,
-  // supaya percobaan tulis ulang (siapa tahu ada ruang yang terbebas)
-  // tetap jalan seperti biasa.
-  if(_storeCache[key]===value&&!_localStorageOverflowed)return;
-  if(!_saveQueue.has(key)){
-    // Baru pertama kali key ini berubah dalam batch yang sedang menunggu
-    // — catat nilai lama yang BENAR-BENAR sudah persisted, bukan cache,
-    // supaya kalau nanti di-rollback nilainya akurat.
-    let prev=null;
-    try{prev=localStorage.getItem(key);}catch(e){prev=null;}
-    _saveQueueOldValues.set(key,prev);
-  }
-  _storeCache[key]=value;
-  _saveQueue.set(key,value);
-  if(_saveQueueTimer)clearTimeout(_saveQueueTimer);
-  _saveQueueTimer=setTimeout(flushSaveQueue,SAVE_QUEUE_DEBOUNCE_MS);
-  updateSaveIndicator();
-}
-
-// Paksa commit batch yang sedang menunggu SEKARANG JUGA (synchronous) —
-// dipanggil dari flushPendingWrites() sebelum aksi kritis (reload setelah
-// restore, dst) supaya tidak ada perubahan yang tertinggal di queue.
-function flushSaveQueue(){
-  if(_saveQueueTimer){clearTimeout(_saveQueueTimer);_saveQueueTimer=null;}
-  if(!_saveQueue.size)return;
-  const batch=Array.from(_saveQueue.entries());
-  const oldVals=new Map(_saveQueueOldValues);
-  _saveQueue.clear();_saveQueueOldValues.clear();
-  _commitBatchTransaction(batch,oldVals);
-}
-
-function _commitBatchTransaction(batch,oldVals){
-  try{
-    const ops=batch.map(([k,v])=>({key:k,oldValue:oldVals.has(k)?oldVals.get(k):null,newValue:v}));
-    localStorage.setItem(TX_JOURNAL_KEY,JSON.stringify({status:'BEGIN',label:'batch save',ops,ts:Date.now()}));
-  }catch(e){/* journal sendiri gagal ditulis (mis. storage penuh) — commit tetap lanjut tanpa proteksi crash utk batch ini */}
-
-  batch.forEach(([key,value])=>{
-    try{
-      localStorage.setItem(key,value);
-      if(_localStorageOverflowed){_localStorageOverflowed=false;}
-    }catch(e){
-      // localStorage penuh/tidak ada — TIDAK diabaikan diam-diam. Cache
-      // in-memory tetap jalan supaya sesi ini tidak crash, tapi user diberi
-      // tahu lewat indikator karena ini berarti cadangan lokal instan hilang
-      // (localStorage adalah satu-satunya backend persisten sekarang —
-      // window.storage/cloud sudah diputuskan, jadi data akan hilang saat
-      // tab ditutup/reload kalau ini gagal).
-      _localStorageOverflowed=true;
-    }
-  });
-
-  try{
-    localStorage.setItem(TX_JOURNAL_KEY,JSON.stringify({status:'END',ts:Date.now()}));
-  }catch(e){/* journal gagal ditandai selesai — tidak fatal, hanya berarti checkTxJournalOnBoot akan tanya konfirmasi sekali lagi saat startup berikutnya */}
-
-  updateSaveIndicator();
-}
-
-// Dipanggil sekali saat boot (Audit Prioritas #2): kalau journal transaksi
-// batch masih berstatus BEGIN, berarti browser/tab tertutup persis di
-// tengah commit batch terakhir. Tawarkan ROLLBACK (kembalikan tiap key
-// yang sempat berubah ke nilai lamanya) atau LANJUT (terima apa adanya
-// key yang sempat ter-commit — localStorage.setItem sendiri per-key selalu
-// atomic, jadi tidak akan ada key yang "setengah tertulis").
-function checkTxJournalOnBoot(){
-  let raw;
-  try{raw=localStorage.getItem(TX_JOURNAL_KEY);}catch(e){return;}
-  if(!raw)return;
-  let j;
-  try{j=JSON.parse(raw);}catch(e){return;}
-  if(!j||j.status!=='BEGIN'||!Array.isArray(j.ops)||!j.ops.length)return;
-  const doneCount=j.ops.filter(o=>{
-    try{return localStorage.getItem(o.key)===o.newValue;}catch(e){return false;}
-  }).length;
-  const rollback=confirm(`⚠ Ada batch penyimpanan yang terputus (browser/tab kemungkinan tertutup di tengah proses menyimpan).\n${doneCount}/${j.ops.length} bagian sempat tersimpan.\n\nOK = ROLLBACK ke kondisi sebelum batch ini\nBatal = LANJUT pakai apa yang sempat tersimpan`);
-  if(rollback){
-    j.ops.forEach(o=>{
-      try{
-        if(o.oldValue===null||o.oldValue===undefined){localStorage.removeItem(o.key);delete _storeCache[o.key];}
-        else{localStorage.setItem(o.key,o.oldValue);_storeCache[o.key]=o.oldValue;}
-      }catch(e){/* satu key gagal di-rollback — lanjut ke key berikutnya, jangan sampai macet */}
-    });
-  }
-  try{localStorage.setItem(TX_JOURNAL_KEY,JSON.stringify({status:'END',label:'(recovered)',ts:Date.now()}));}catch(e){}
-}
-
-// ============================================================
-// SYSTEM UNDO (Audit Prioritas #1) — terpisah dari undoStack per-mode
-// (undoEntry, khusus untuk tambah/hapus 1 entri HARIAN/2H/3H/4H). Ini
-// snapshot SELURUH localStorage tracker, dipakai di 4 titik yang audit
-// tandai sering "lolos" dari undo biasa karena mengubah banyak state
-// sekaligus dan tidak menghasilkan cara mudah kembali:
-//   1) SETELAH restore backup selesai
-//   2) SAAT ambil rollback snapshot (sebelum overwrite oleh proses lain)
-//   3) SAAT Generate AI PRED berjalan (sebelum hasil lama ditimpa)
-//   4) SAAT respons Oracle datang TERLAMBAT (>8 detik) dan akan menimpa
-//      hasil yang mungkin sudah tidak relevan lagi bagi user
-// Dibatasi 5 snapshot terbaru (in-memory saja — sengaja TIDAK ditulis ke
-// storage, supaya snapshot besar ini sendiri tidak menambah beban I/O
-// atau ikut tersimpan permanen kalau tidak pernah dipakai).
-// ============================================================
-const _systemUndoStack=[];
-const SYSTEM_UNDO_MAX=5;
-function pushSystemUndoSnapshot(label){
-  try{
-    flushSaveQueue(); // pastikan snapshot mengambil state yang benar-benar sudah persisted
-    const store={};
-    for(let i=0;i<localStorage.length;i++){
-      const k=localStorage.key(i);
-      if(k===TX_JOURNAL_KEY)continue; // journal transaksi bukan bagian dari data tracker
-      store[k]=localStorage.getItem(k);
-    }
-    _systemUndoStack.push({label:label||'(aksi)',ts:Date.now(),store});
-    if(_systemUndoStack.length>SYSTEM_UNDO_MAX)_systemUndoStack.shift();
-    const btn=$id('systemUndoBtn');
-    if(btn){btn.style.display='inline-block';btn.title='Kembalikan sebelum: '+label;}
-  }catch(e){/* snapshot gagal diambil — tidak fatal, hanya berarti UNDO SISTEM untuk aksi ini tidak tersedia */}
-}
-function systemUndo(){
-  if(!_systemUndoStack.length){alert('Tidak ada snapshot UNDO SISTEM yang tersedia.');return;}
-  const snap=_systemUndoStack[_systemUndoStack.length-1];
-  if(!confirm(`↩ UNDO SISTEM\n\nKembalikan ke kondisi sebelum: "${snap.label}"\n(${new Date(snap.ts).toLocaleString('id-ID')})\n\nHalaman akan di-reload setelah ini. Lanjutkan?`))return;
-  _systemUndoStack.pop();
-  const pairs=Object.entries(snap.store);
-  // Tulis balik lewat transaksi journal-protected yang sama (Audit
-  // Prioritas #2) supaya kalau crash persis di tengah undo ini pun,
-  // startup berikutnya tetap bisa pulih.
-  _commitBatchTransaction(pairs,new Map(pairs.map(([k])=>[k,(function(){try{return localStorage.getItem(k);}catch(e){return null;}})()])));
-  const btn=$id('systemUndoBtn');
-  if(btn)btn.style.display=_systemUndoStack.length?'inline-block':'none';
-  alert('✓ UNDO SISTEM selesai. Halaman akan dimuat ulang.');
-  setTimeout(()=>location.reload(),300);
-}
-
-// Sebelumnya menunggu write window.storage yang masih antre. Sekarang
-// (localStorage-only) tidak ada lagi write async ke cloud — cukup pastikan
-// save queue localStorage sudah di-flush (synchronous), lalu langsung
-// selesai. Signature (async, param maxWaitMs) dipertahankan supaya semua
-// pemanggil lama (await flushPendingWrites(...)) tetap jalan tanpa diubah.
-async function flushPendingWrites(maxWaitMs){
-  flushSaveQueue(); // pastikan tidak ada batch yang masih menunggu debounce
-  return true;
-}
-function updateSaveIndicator(){
-  const el=$id('saveIndicator');
-  if(!el)return;
-  if(_localStorageOverflowed){
-    el.textContent='⚠ penyimpanan lokal penuh — data hanya di memori, export backup sekarang';
-    el.style.opacity='1';el.style.color='var(--red)';
-    return;
-  }
-  el.style.color='';
-  el.textContent='✓ tersimpan (lokal)';
-  el.style.opacity='0.55';
-}
-
-// Peringatkan kalau user mencoba menutup/reload tab padahal localStorage
-// sempat overflow (data terancam hanya ada di memori) — semua write
-// sekarang synchronous ke localStorage, jadi tidak ada lagi write cloud
-// tertunda yang perlu ditunggu.
-window.addEventListener('beforeunload',function(e){
-  flushSaveQueue(); // commit batch yang masih menunggu debounce sebelum tab benar-benar tertutup
-  if(_storagePendingWrites>0||_localStorageOverflowed){
-    e.preventDefault();
-    e.returnValue='';
-    return '';
-  }
-});
-
-// ============================================================
-// STORAGEMANAGER — satu namespace tunggal yang mengumpulkan SEMUA modul
-// penyimpanan (queue, transaction, journal, rollback, recovery, checksum,
-// snapshot, telemetry) supaya ada SATU permukaan yang bisa diaudit/diuji,
-// bukan fungsi global tersebar di banyak lokasi file.
-//
-// CATATAN DESAIN: fungsi global lama (lsSet, lsGet, logTelemetryError,
-// pushSystemUndoSnapshot, systemUndo, _journalBegin/_journalEnd/_journalRead,
-// restoreAutoSnapshotBeforeRestore, _recovery*, sha256Hex,
-// canonicalStoreString, dst) TETAP ADA seperti sebelumnya — termasuk yang
-// dipanggil langsung dari atribut onclick="..." di HTML dan dari ratusan
-// titik lain di seluruh file. StorageManager di sini TIDAK memindahkan
-// implementasinya (yang berarti menulis ulang & menguji ulang ratusan
-// titik panggilan tanpa ada test suite sama sekali — risikonya jauh lebih
-// besar daripada manfaatnya), melainkan mengelompokkannya jadi satu objek
-// beranotasi yang mereferensikan implementasi ASLI yang sama persis. Efek
-// praktisnya: kode baru/audit/test SEKARANG bisa selalu memakai
-// `StorageManager.queue.set(...)`, `StorageManager.snapshot.systemUndo()`,
-// dst sebagai satu pintu masuk konsisten, sementara kode lama yang sudah
-// berjalan (termasuk onclick HTML) tidak perlu disentuh sama sekali —
-// nol perubahan perilaku, nol risiko regresi baru.
-// ============================================================
-const StorageManager={
-  queue:{
-    get:(k)=>lsGet(k),
-    set:(k,v)=>lsSet(k,v),
-    setImmediate:(k,v)=>lsSetImmediate(k,v),
-    flush:()=>flushSaveQueue(),
-    flushPendingWrites:(maxWaitMs)=>flushPendingWrites(maxWaitMs),
-    pending:()=>_saveQueue,          // Map key->value yang masih menunggu debounce
-    pendingCloudWrites:()=>_pendingSaves, // selalu kosong sekarang — tidak ada lagi write cloud/window.storage
-    isOverflowed:()=>_localStorageOverflowed,
-    debounceMs:SAVE_QUEUE_DEBOUNCE_MS,
-    updateIndicator:()=>updateSaveIndicator()
-  },
-  transaction:{
-    journalKey:TX_JOURNAL_KEY,
-    commit:(batchPairs,oldValuesMap)=>_commitBatchTransaction(batchPairs,oldValuesMap),
-    checkOnBoot:()=>checkTxJournalOnBoot()
-  },
-  journal:{ // journal KHUSUS restore/import backup (tah2_restore_journal)
-    begin:(label)=>_journalBegin(label),
-    end:()=>_journalEnd(),
-    read:()=>_journalRead()
-  },
-  rollback:{
-    restoreToBeforeLastRestore:()=>restoreAutoSnapshotBeforeRestore()
-  },
-  recovery:{
-    showMode:(reason,detailList)=>_showRecoveryMode(reason,detailList),
-    detectCorruptKeys:()=>_detectCorruptCriticalKeys(),
-    restoreAutoSnapshot:()=>_recoveryRestoreSnapshot(),
-    openImportDialog:()=>_recoveryOpenImport(),
-    handleImportFile:(input)=>_recoveryHandleImportFile(input),
-    resetAll:()=>_recoveryReset(),
-    downloadRaw:()=>_recoveryDownloadRaw()
-  },
-  checksum:{
-    canonicalize:(store)=>canonicalStoreString(store),
-    sha256Hex:(str)=>sha256Hex(str)
-  },
-  snapshot:{ // system undo — snapshot seluruh localStorage di titik-titik berisiko
-    push:(label)=>pushSystemUndoSnapshot(label),
-    undo:()=>systemUndo(),
-    stack:()=>_systemUndoStack,
-    maxDepth:SYSTEM_UNDO_MAX
-  },
-  telemetry:{
-    log:(context,err)=>logTelemetryError(context,err),
-    export:()=>exportTelemetryLog(),
-    entries:()=>_errorTelemetry,
-    pushRotating:(arr,entry,opts)=>pushRotatingLog(arr,entry,opts)
-  }
-};
-
-
-// entri state[n] selalu flat object {v,ts,putaran} tanpa nested
-// array/object, jadi shallow-copy per item (bukan JSON.stringify+parse
-// atas SELURUH array) sudah cukup dan jauh lebih murah — sebelumnya tiap
-// klik tambah 1 entri melakukan deep-clone lewat JSON round-trip atas
-// seluruh histori (bisa ratusan entri) HANYA untuk 1 snapshot undo.
-function _cloneStateArr(arr){
-  return arr.map(x=>(x&&typeof x==='object')?{...x}:x);
-}
-// MIGRASI 2026-08-22: Supabase (tabel `entries`) sekarang SATU-SATUNYA
-// sumber kebenaran utk data historis 2H/3H/4H — TIDAK ADA fallback diam2
-// ke localStorage kalau gagal ("no internet, no access, titik"). Dipanggil
-// SEKALI dari boot() dgn await; kalau gagal, boot() menampilkan error dan
-// TIDAK melanjutkan (lihat blok try/catch di boot()).
-async function loadData(n){
-  const rows=await SBData.loadEntries(n);
-  if(rows.length)return rows;
-  // Tabel kosong (device/akun baru) -- seed dari BASE_INIT lalu simpan.
-  const d=BASE_INIT[n].map((v,i)=>({v,ts:'AWAL',putaran:i+1}));
-  saveData(n,d);
-  return d;
-}
-// saveData TETAP synchronous dari sisi pemanggil (fire-and-forget, sama
-// seperti pola lsSet sebelumnya -- puluhan call site existing TIDAK perlu
-// diubah). localStorage tetap ditulis sbg cache/buffer lokal (BUKAN
-// sumber kebenaran, lihat instruksi Chimix 2026-08-22), Supabase yg
-// menentukan apa yg benar-benar tersimpan.
-function saveData(n,d){
-  try{lsSet('tah2_data_'+n,JSON.stringify(d));}catch(e){}
-  SBData.replaceEntries(n,d).then(r=>{if(!r.ok)logTelemetryError('saveData(Supabase) mode '+n,new Error(r.reason||'unknown'));}).catch(err=>logTelemetryError('saveData(Supabase) mode '+n,err));
-}
-function vals(data){return data.map(x=>typeof x==='object'?x.v:x);}
-
-function loadSecState(id){
-  try{const s=lsGet('tah2_sec_'+id);return s===null?true:s==='1';}catch(e){return true;}
-}
-function saveSecState(id,open){try{lsSet('tah2_sec_'+id,open?'1':'0');}catch(e){}}
-
-// Prediksi aktif (generate harian, 11 kandidat) — terpisah dari data utama
-function loadPredState(n){
-  try{
-    const s=lsGet('tah2_pred_'+n);
-    if(s){
-      const parsed=JSON.parse(s);
-      // Migrasi dari struktur lama (result tunggal) ke results[] array
-      if(!Array.isArray(parsed.results)){
-        parsed.results=parsed.result!==null&&parsed.result!==undefined?[{val:parsed.result,isJp:parsed.status?parsed.status.includes('jp'):false}]:[];
-      }
-      return parsed;
-    }
-  }catch(e){}
-  return{date:null,candidates:[],status:[],result:null,results:[]};
-}
-const PRED_RESULT_LIMIT=10;
-// Request 2026-08: auto-generate PRED (2H/3H/4H/KMB) dari raw Harian/Dash,
-// tanpa perlu tekan tombol GENERATE manual -- lihat _harianAutoPredOnRawInput,
-// autoSlotPred, dan pemanggilan force=true di submitHarian(). Begitu
-// candidate digenerate (baik manual maupun otomatis), langsung dicatat ke
-// histState sebagai entri PENDING (result:null,jp:null) -- supaya riwayat
-// prediksi permanen tercatat walau result asli belum diketahui. Saat
-// result asli disubmit (submitResult/submitResultKmb), entri pending yang
-// sama diisi belakangan (bukan bikin duplikat baru).
-function _histUpsertPending(nKey,ps){
-  const arr=histState[nKey];
-  if(!arr||!ps||!ps.candidates||!ps.candidates.length)return;
-  const idx=arr.findIndex(h=>h.date===ps.date&&h.result===null);
-  const entry={date:ps.date,candidates:[...ps.candidates],result:null,jp:null,engineVersion:ps.engineVersion||getEngineMode()};
-  if(idx>=0)arr[idx]=entry;else arr.push(entry);
-  saveHistState(nKey);
-}
-function _histUpsertPendingV2(nKey,ps){
-  const arr=histStateV2[nKey];
-  if(!arr||!ps||!ps.candidates||!ps.candidates.length)return;
-  const idx=arr.findIndex(h=>h.date===ps.date&&h.result===null);
-  const entry={date:ps.date,candidates:[...ps.candidates],result:null,jp:null,engineVersion:'batch2'};
-  if(idx>=0)arr[idx]=entry;else arr.push(entry);
-  saveHistStateV2(nKey);
-}
-// Request 2026-08: cari result AKTUAL yang SUDAH ADA di data historis (state[n]
-// utk 2H/3H/4H, kState/kMeta lintas tipe utk KMB) untuk tanggal tertentu --
-// dipakai backdate prediksi supaya kalau datanya sudah pernah masuk (lewat
-// Harian/PRED/Kembar), tidak perlu ketik ulang manual result-nya.
-// Request 2026-08 (revisi): sebelumnya lookup ini dedup murni per NILAI --
-// akibatnya kalau 2 sesi beda (mis. 14.30 & 23.00) kebetulan hasilnya sama
-// persis, cuma tampil 1 chip padahal ada 2 entri asli. Sekarang berbasis
-// rawLog (per sesi/slot) supaya SEMUA entri tanggal itu ikut ditampilkan
-// apa adanya, lengkap dengan label sesi -- baru dianggap "tidak ambigu"
-// (auto-record) kalau NILAI-nya kebetulan sama semua walau beda sesi.
-function _actualEntriesForDate(n,dateISO){
-  const out=[];
-  rawLog.forEach(r=>{
-    if(r.date!==dateISO||!r.result||!r.appliedTo||!r.appliedTo.includes(n))return;
-    const L=r.result.length;
-    let v=null;
-    if(L===4){if(n===4)v=r.result;else if(n===3)v=r.result.slice(1);else if(n===2)v=r.result.slice(2);}
-    else if(L===3){if(n===3)v=r.result;else if(n===2)v=r.result.slice(1);}
-    else if(L===2&&n===2)v=r.result;
-    if(v)out.push({v,session:r.session,slot:r.slot});
-  });
-  return out;
-}
-function _actualEntriesForDateKmb(dateISO){
-  const out=[];
-  rawLog.forEach(r=>{
-    if(r.date!==dateISO||!r.result||!r.appliedTo)return;
-    const kTag=r.appliedTo.find(a=>typeof a==='string'&&a.indexOf('KEMBAR-')===0&&a.indexOf('KEMBAR-PARSIAL-')!==0);
-    if(kTag)out.push({v:r.result,session:r.session,slot:r.slot});
-  });
-  return out;
-}
-// Request 2026-08: BACKFILL SEKALIGUS — untuk semua raw+result historis yg
-// sudah lama tercatat di rawLog (tanggal < hari ini), generate kandidat
-// "as of" tanggal itu (engine sama persis dgn backdate manual) DAN langsung
-// catat hit/miss ke riwayat, satu entri per SESI/SLOT (bukan per tanggal --
-// jadi tidak ambigu seperti flow backdate manual per-tanggal). Idempoten:
-// entri yg sudah pernah diproses ditandai di localStorage (backfillDone),
-// aman dipanggil berkali-kali/dari subtab manapun tanpa dobel-catat.
-let backfillDone=(function(){try{const s=lsGet('tah2_backfill_done');return s?JSON.parse(s):[];}catch(e){return[];}})();
-function saveBackfillDone(){try{lsSet('tah2_backfill_done',JSON.stringify(backfillDone));try{AHSyncEngine.markPendingExtended();}catch(e2){}}catch(e){}}
-function runFullBackfill(){
-  const today=todayStr();
-  const doneSet=new Set(backfillDone);
-  const backfillEngineVersion=getEngineMode();
-  let added=0;
-  rawLog.forEach(r=>{
-    if(!r.date||r.date>=today||!r.result)return; // hanya data LAMPAU yg result-nya sudah pasti
-    [2,3,4].forEach(n=>{
-      if(!r.appliedTo||!r.appliedTo.includes(n))return;
-      const key='n'+n+'|'+r.date+'|'+r.session+'|'+r.slot;
-      if(doneSet.has(key))return;
-      const L=r.result.length;
-      let v=null;
-      if(L===4){if(n===4)v=r.result;else if(n===3)v=r.result.slice(1);else if(n===2)v=r.result.slice(2);}
-      else if(L===3){if(n===3)v=r.result;else if(n===2)v=r.result.slice(1);}
-      else if(L===2&&n===2)v=r.result;
-      if(!v)return;
-      const fullBd=scoreCandidatesCombinedAsOf(n,ALL[n].length,r.date);
-      const tagged=injectPositionalCandidates(fullBd,diversifyCandidates(fullBd,15),n,r.date);
-      const candidates=tagged.map(s=>s.cand);
-      const hitIdx=candidates.indexOf(v);
-      const isJp=hitIdx>=0;
-      histState[n].push({date:r.date,candidates,result:v,jp:isJp,session:r.session,slot:r.slot,engineVersion:backfillEngineVersion});
-      try{_recordEngineAudit(n,v,{date:r.date,candidates,candidateSources:tagged.map(s=>s.source||'core')},hitIdx,isJp);}catch(eAud){}
-      doneSet.add(key);added++;
-    });
-    const kTag=r.appliedTo&&r.appliedTo.find(a=>typeof a==='string'&&a.indexOf('KEMBAR-')===0&&a.indexOf('KEMBAR-PARSIAL-')!==0);
-    if(kTag){
-      const keyK='KMB|'+r.date+'|'+r.session+'|'+r.slot;
-      if(!doneSet.has(keyK)){
-        const merged=kmbShortlistAllTypesAsOf(30,r.date);
-        if(merged.length){
-          const tagged=kmbInjectPositionalAllTypes(merged,kmbDiversify(merged,10),r.date);
-          const candidates=tagged.map(s=>s.cand);
-          const hitIdx=candidates.indexOf(r.result);
-          const isJp=hitIdx>=0;
-          histState.KMB.push({date:r.date,candidates,result:r.result,jp:isJp,session:r.session,slot:r.slot,engineVersion:backfillEngineVersion});
-          try{_recordEngineAudit('KMB',r.result,{date:r.date,candidates,candidateSources:tagged.map(s=>s.source||'core')},hitIdx,isJp);}catch(eAud){}
-          doneSet.add(keyK);added++;
-        }
-      }
-    }
-  });
-  backfillDone=[...doneSet];
-  saveBackfillDone();
-  saveHistState(2);saveHistState(3);saveHistState(4);saveHistState('KMB');
-  renderPred(2);renderPred(3);renderPred(4);renderPredKmb();
-  return added;
-}
-function handleRunFullBackfill(btnId){
-  const added=runFullBackfill();
-  const btn=$id(btnId);
-  if(btn){
-    const orig=btn.textContent;
-    btn.textContent=added>0?`✓ ${added} riwayat baru ditambahkan`:'✓ Sudah lengkap, tidak ada yang baru';
-    setTimeout(()=>{btn.textContent=orig;},3000);
-  }
-}
-function savePredState(n){try{lsSet('tah2_pred_'+n,JSON.stringify(predState[n]));try{AHSyncEngine.markPendingExtended();}catch(e2){}}catch(e){}
-  try{if(typeof SBData!=='undefined'&&SBData.replacePredState)SBData.replacePredState(n,predState[n]).catch(()=>{});}catch(e3){}}
-
-// Riwayat prediksi (histori generate+result, untuk JP/Zonk & Evaluasi)
-function loadHistState(n){
-  try{const s=lsGet('tah2_hist_'+n);if(s)return JSON.parse(s);}catch(e){}
-  return[];
-}
-function saveHistState(n){try{lsSet('tah2_hist_'+n,JSON.stringify(histState[n]));try{AHSyncEngine.markPendingExtended();}catch(e2){}}catch(e){}
-  try{if(typeof SBData!=='undefined'&&SBData.replaceHistState)SBData.replaceHistState(n,histState[n]).catch(()=>{});}catch(e3){}}
-
-// ============================================================
-// BATCH 2 — load/save predState/histState (namespace key BEDA:
-// tah2_predv2_*/tah2_histv2_*, TIDAK menyentuh key Batch 1 sama sekali).
-// Sengaja TIDAK memanggil SBData.replacePredState/replaceHistState (itu
-// menulis ke tabel Supabase yg sama persis dipakai Batch 1, dikunci per
-// `n` saja tanpa pembeda batch -- kalau dipanggil di sini bisa menimpa
-// data Batch 1 di server). Untuk saat ini Batch 2 tersimpan localStorage
-// saja (markPendingExtended tetap dipanggil, pola sama seperti
-// predSlotLog, supaya konsisten dgn mekanisme dirty-flag yang ada).
-// ============================================================
-function loadPredStateV2(n){
-  try{const s=lsGet('tah2_predv2_'+n);if(s){const parsed=JSON.parse(s);if(!Array.isArray(parsed.results))parsed.results=[];return parsed;}}catch(e){}
-  return{date:null,candidates:[],status:[],result:null,results:[]};
-}
-function savePredStateV2(n){try{lsSet('tah2_predv2_'+n,JSON.stringify(predStateV2[n]));try{AHSyncEngine.markPendingExtended();}catch(e2){}}catch(e){}}
-function loadHistStateV2(n){
-  try{const s=lsGet('tah2_histv2_'+n);if(s)return JSON.parse(s);}catch(e){}
-  return[];
-}
-function saveHistStateV2(n){try{lsSet('tah2_histv2_'+n,JSON.stringify(histStateV2[n]));try{AHSyncEngine.markPendingExtended();}catch(e2){}}catch(e){}}
-
-// ============================================================
-// LOG AUDIT ENGINE OTOMATIS (domain baru — Sprint Ekspansi Sync)
-// Dibuat otomatis setiap kali result masuk lewat submitResult()/
-// submitResultKmb() — TIDAK dipicu manual. Satu entri = 1 snapshot
-// berisi 3 hal sekaligus: (1) audit kandidat vs result aktual,
-// (2) audit pola huruf rank-1 vs result (posisi mana yg cocok),
-// (3) audit engine — akurasi kumulatif per mode di momen itu (dari
-// getAkurasiStats). Permanen, tidak pernah di-slice/dipotong —
-// sumber histori "apakah engine makin akurat dari waktu ke waktu".
-// ============================================================
-let engineAuditLog=[];
-function loadEngineAuditLog(){try{const s=lsGet('tah2_engine_audit_log');return s?JSON.parse(s):[];}catch(e){return[];}}
-function saveEngineAuditLog(){try{lsSet('tah2_engine_audit_log',JSON.stringify(engineAuditLog));try{AHSyncEngine.markPendingExtended();}catch(e2){}}catch(e){}
-  try{if(typeof SBData!=='undefined'&&SBData.replaceEngineAuditLog)SBData.replaceEngineAuditLog(engineAuditLog).catch(()=>{});}catch(e3){}}
-function _buildEngineAuditSnapshot(mode,val,ps,hitIdx,isJp){
-  try{
-    const rank1=(ps.candidates&&ps.candidates[0])||'';
-    let letterMatchCount=0;const letterMatchPos=[];
-    const len=Math.min(rank1.length,val.length);
-    for(let i=0;i<len;i++){if(rank1[i]===val[i]){letterMatchCount++;letterMatchPos.push(i+1);}}
-    let engineSnapshot=null;
-    try{engineSnapshot=getAkurasiStats(mode);}catch(e){}
-    return{
-      id:'aud_'+Date.now()+'_'+mode,
-      ts:nowTs(),
-      dateISO:todayISO(),
-      mode,
-      candidateAudit:{candidates:[...(ps.candidates||[])],result:val,isJp,hitIdx},
-      letterPatternAudit:{rank1Candidate:rank1,result:val,matchCount:letterMatchCount,matchPositions:letterMatchPos,patternLen:len},
-      engineSnapshot
-    };
-  }catch(e){return null;}
-}
-function _recordEngineAudit(mode,val,ps,hitIdx,isJp){
-  try{
-    const snap=_buildEngineAuditSnapshot(mode,val,ps,hitIdx,isJp);
-    if(snap){engineAuditLog.unshift(snap);saveEngineAuditLog();}
-  }catch(e){/* audit gagal dicatat tidak boleh menggagalkan submit result itu sendiri */}
-}
-
-function loadFavs(n){
-  try{const s=lsGet('tah2_fav_'+n);return s?new Set(JSON.parse(s)):new Set();}catch(e){return new Set();}
-}
-function saveFavs(n,fset){try{lsSet('tah2_fav_'+n,JSON.stringify([...fset]));}catch(e){}}
-function toggleFav(n,cand){
-  const favs=loadFavs(n);
-  if(favs.has(cand))favs.delete(cand);else favs.add(cand);
-  saveFavs(n,favs);
-  renderShortlist(n);renderHistory(n);
-}
-
-// ============================================================
 // STATE GLOBAL
 // ============================================================
 // NOTE: nilai diisi di dalam boot() setelah localStorage selesai dimuat
@@ -2964,6 +1675,8 @@ const state={};
 const undoStack={2:[],3:[],4:[]};
 const predState={};
 const histState={};
+const predRawInput={2:'',3:'',4:''};
+const predRawInputV2={2:'',3:'',4:''};
 // ============================================================
 // BATCH 2 (2026-08-27) -- clone namespace data utk tab "PRED V2".
 // Struktur & perilaku 100% sama dgn predState/histState/backdatePred di
@@ -4204,7 +2917,96 @@ function scoreCandidatesCombinedAsOf(n,topN,asOfDateISO){
   return result;
 }
 
+// entri state[n] selalu flat object {v,ts,putaran} tanpa nested
+// array/object, jadi shallow-copy per item (bukan JSON.stringify+parse
+// atas SELURUH array) sudah cukup dan jauh lebih murah — sebelumnya tiap
+// klik tambah 1 entri melakukan deep-clone lewat JSON round-trip atas
+// seluruh histori (bisa ratusan entri) HANYA untuk 1 snapshot undo.
+function _cloneStateArr(arr){
+  return arr.map(x=>(x&&typeof x==='object')?{...x}:x);
+}
+// MIGRASI 2026-08-22: Supabase (tabel `entries`) sekarang SATU-SATUNYA
+// sumber kebenaran utk data historis 2H/3H/4H — TIDAK ADA fallback diam2
+// ke localStorage kalau gagal ("no internet, no access, titik"). Dipanggil
+// SEKALI dari boot() dgn await; kalau gagal, boot() menampilkan error dan
+// TIDAK melanjutkan (lihat blok try/catch di boot()).
+async function loadData(n){
+  const rows=await SBData.loadEntries(n);
+  if(rows.length)return rows;
+  // Tabel kosong (device/akun baru) -- seed dari BASE_INIT lalu simpan.
+  const d=BASE_INIT[n].map((v,i)=>({v,ts:'AWAL',putaran:i+1}));
+  saveData(n,d);
+  return d;
+}
+// saveData TETAP synchronous dari sisi pemanggil (fire-and-forget, sama
+// seperti pola lsSet sebelumnya -- puluhan call site existing TIDAK perlu
+// diubah). localStorage tetap ditulis sbg cache/buffer lokal (BUKAN
+// sumber kebenaran, lihat instruksi Chimix 2026-08-22), Supabase yg
+// menentukan apa yg benar-benar tersimpan.
+function saveData(n,d){
+  try{lsSet('tah2_data_'+n,JSON.stringify(d));}catch(e){}
+  SBData.replaceEntries(n,d).then(r=>{if(!r.ok)logTelemetryError('saveData(Supabase) mode '+n,new Error(r.reason||'unknown'));}).catch(err=>logTelemetryError('saveData(Supabase) mode '+n,err));
+}
+function vals(data){return data.map(x=>typeof x==='object'?x.v:x);}
+
+function loadSecState(id){
+  try{const s=lsGet('tah2_sec_'+id);return s===null?true:s==='1';}catch(e){return true;}
+}
+function saveSecState(id,open){try{lsSet('tah2_sec_'+id,open?'1':'0');}catch(e){}}
+
+// Prediksi aktif — state runtime; histori permanen disimpan di Supabase
+function loadPredState(n){
+  try{
+    const s=lsGet('tah2_pred_'+n);
+    if(s){
+      const parsed=JSON.parse(s);
+      // Migrasi dari struktur lama (result tunggal) ke results[] array
+      if(!Array.isArray(parsed.results)){
+        parsed.results=parsed.result!==null&&parsed.result!==undefined?[{val:parsed.result,isJp:parsed.status?parsed.status.includes('jp'):false}]:[];
+      }
+      return parsed;
+    }
+  }catch(e){}
+  return{date:null,candidates:[],status:[],result:null,results:[]};
+}
+const PRED_RESULT_LIMIT=10;
+function loadHistState(n){return[];}
+function saveHistState(n){try{if(n==='KMB'){if(typeof SBData!=='undefined'&&SBData.replaceHistState)SBData.replaceHistState(n,histState[n]).catch(()=>{});}else if(typeof SBData!=='undefined'&&SBData.upsertPredV1History)SBData.upsertPredV1History(n,histState[n]).catch(()=>{});}catch(e){}}
+// Request 2026-08: auto-generate PRED (2H/3H/4H/KMB) dari raw Harian/Dash,
+// tanpa perlu tekan tombol GENERATE manual -- lihat _harianAutoPredOnRawInput,
+// autoSlotPred, dan pemanggilan force=true di submitHarian(). Begitu
+// candidate digenerate (baik manual maupun otomatis), langsung dicatat ke
+// histState sebagai entri PENDING (result:null,jp:null) -- supaya riwayat
+// prediksi permanen tercatat walau result asli belum diketahui. Saat
+// result asli disubmit (submitResult/submitResultKmb), entri pending yang
+// sama diisi belakangan (bukan bikin duplikat baru).
+function _histUpsertPending(nKey,ps){
+  const arr=histState[nKey];
+  if(!arr||!ps||!ps.candidates||!ps.candidates.length)return;
+  const idx=arr.findIndex(h=>h.date===ps.date&&h.result===null);
+  const entry={date:ps.date,raw:ps.raw||predRawInput[nKey]||'',candidates:[...ps.candidates],result:null,jp:null,engineVersion:ps.engineVersion||getEngineMode()};
+  if(idx>=0)arr[idx]=entry;else arr.push(entry);
+  saveHistState(nKey);
+}
+function _histUpsertPendingV2(nKey,ps){
+  const arr=histStateV2[nKey];
+  if(!arr||!ps||!ps.candidates||!ps.candidates.length)return;
+  const idx=arr.findIndex(h=>h.date===ps.date&&h.result===null);
+  const entry={date:ps.date,raw:ps.raw||predRawInputV2[nKey]||'',candidates:[...ps.candidates],result:null,jp:null,engineVersion:'batch2'};
+  if(idx>=0)arr[idx]=entry;else arr.push(entry);
+  saveHistStateV2(nKey);
+}
+
 // ============================================================
+// PRED V2 active state — runtime/cache only; histori permanen ada di Supabase.
+function loadPredStateV2(n){
+  try{const s=lsGet('tah2_predv2_'+n);if(s){const parsed=JSON.parse(s);if(!Array.isArray(parsed.results))parsed.results=[];return parsed;}}catch(e){}
+  return{date:null,raw:'',candidates:[],status:[],result:null,results:[]};
+}
+function savePredStateV2(n){try{lsSet('tah2_predv2_'+n,JSON.stringify(predStateV2[n]));}catch(e){}}
+function loadHistStateV2(n){return[];}
+function saveHistStateV2(n){try{if(typeof SBData!=='undefined'&&SBData.upsertPredV2History)SBData.upsertPredV2History(n,histStateV2[n]).catch(()=>{});}catch(e){}}
+
 // BATCH 2 — MESIN SKOR ALTERNATIF (2026-08-27, permintaan user: "buat
 // batch 2, cara hitung dan susunan berbeda dari batch 1"). Filosofi
 // beda total dari scoreCandidatesCombined (yg menilai 1 kombo SEBAGAI
@@ -5282,7 +4084,7 @@ function _lockGuard(msg){
 // key baru yang belum dikenal versi ini, tetap diimpor apa adanya).
 // ============================================================
 const _KNOWN_KEY_PATTERNS=[
-  /^tah2_data_[234]$/,/^tah2_pred_(2|3|4|KMB)$/,/^tah2_hist_(2|3|4|KMB)$/,
+  /^tah2_data_[234]$/,/^tah2_pred_(2|3|4|KMB)$/,
   /^tah2_fav_/,/^tah2_sec_/,/^tah2_rawlog$/,/^tah2_rawdraft$/,/^tah2_slotstate$/,
   /^tah2_aipred_state$/,/^tah2_aipred_hist$/,/^tah2_auditlog$/,/^tah2_rawanalisalog$/,
   /^tah2_engine_mode$/,/^tah2_evolution_mode$/,/^tah2_last_export$/,
@@ -5369,7 +4171,7 @@ function _journalRead(){
 // ============================================================
 function _detectCorruptCriticalKeys(){
   const criticalKeys=['tah2_data_2','tah2_data_3','tah2_data_4','tah2_rawlog',
-    'tah2_pred_2','tah2_pred_3','tah2_pred_4','tah2_hist_2','tah2_hist_3','tah2_hist_4',
+    'tah2_pred_2','tah2_pred_3','tah2_pred_4',
     'tah2_aipred_state','tah2_slotstate','tah2_auditlog','tah2_rawanalisalog',
     'tah_kembar_type_PAIR','tah_kembar_type_DOUBLE','tah_kembar_type_TRIPLE','tah_kembar_type_QUAD'];
   const corrupt=[];
@@ -6115,7 +4917,6 @@ function autoSlotPred(sessKey,slot){
   renderSlotBox(sessKey,slot);
   // Request 2026-08: sama seperti tab Harian, raw lengkap di Dash juga
   // langsung auto-generate tab PRED (2H/3H/4H/KMB) tanpa tombol manual.
-  _autoGeneratePredTab();
 }
 
 // Minta Oracle analisa 1 kolom SAJA — independen dari kolom/sesi lain,
@@ -6378,7 +5179,7 @@ async function prosesRawHarian(){
 function renderAccuracyComparisonPanel(){
   let html=`<div class="uni-input-box" style="border-color:var(--gold)">
     <div class="uni-title" style="color:var(--gold)">⚖️ PERBANDINGAN AKURASI: PRED vs AI PRED</div>
-    <div class="uni-sub">Dua metode independen (rumus tetap V2+V3 vs provenance+penalaran Oracle), dibandingkan tiap mode dari histori JP/ZONK masing-masing.</div>`;
+    <div class="uni-sub">Dua metode independen (PRED V1 vs provenance+penalaran Oracle), dibandingkan tiap mode dari histori JP/ZONK masing-masing.</div>`;
   [4,3,2].forEach(n=>{
     const predHist=histState[n]||[];
     const predTotal=predHist.length,predHit=predHist.filter(h=>h.jp).length;
@@ -6393,7 +5194,7 @@ function renderAccuracyComparisonPanel(){
     html+=`<div style="background:var(--panel2);border-radius:8px;padding:10px 12px;margin-top:8px">
       <div style="font-size:9px;color:${AC[n]};font-family:'Orbitron',monospace;letter-spacing:1px;margin-bottom:6px">${n}H / ${n}D</div>
       <div style="display:flex;justify-content:space-between;align-items:center;font-size:10px;margin-bottom:4px">
-        <span>PRED (V2+V3)</span>
+        <span>PRED V1</span>
         <span style="color:${predTotal?'var(--text)':'var(--dim)'}">${predTotal?`${predPct}% JP (${predHit}/${predTotal}x)`:'belum ada data'}</span>
       </div>
       <div style="display:flex;justify-content:space-between;align-items:center;font-size:10px;margin-bottom:6px">
@@ -6423,8 +5224,7 @@ function renderDash(){
     </div>
   </div>`;
 
-  html+=renderV3Insights();
-
+  
   html+=renderDashRawInput();
 
   html+=`<div class="uni-input-box" style="border-color:var(--purple)">
@@ -6491,7 +5291,7 @@ function renderDash(){
   if(!anyHot)html+='<div class="empty">Belum ada data — mulai input di tab 2H/3H/4H</div>';
 
   // KANDIDAT PRIORITAS
-  html+=`<div style="font-family:'Orbitron',monospace;font-size:8px;letter-spacing:3px;color:var(--purple);margin-bottom:8px;margin-top:10px">⚡ KANDIDAT PRIORITAS (TOP 3, V2+V3)</div>`;
+  html+=`<div style="font-family:'Orbitron',monospace;font-size:8px;letter-spacing:3px;color:var(--purple);margin-bottom:8px;margin-top:10px">⚡ KANDIDAT PRIORITAS PRED V1 (TOP 3)</div>`;
   [2,3,4].forEach(n=>{
     const data=state[n];if(!data.length)return;
     const top3=scoreCandidatesCombined(n,3);
@@ -6516,53 +5316,6 @@ function renderDash(){
       if(el&&el.value&&el.value.trim().length===8)autoSlotPred(sess.key,slot);
     }
   });
-}
-
-function renderV3Insights(){
-  let html='<div class="dash-card" style="margin-bottom:10px">';
-  html+=`<div class="dash-card-title" style="color:var(--purple)">🧬 INSIGHT ENGINE V3</div>`;
-
-  // RESET DETECTOR
-  let anyReset=false;
-  [2,3,4].forEach(n=>{
-    const data=vals(state[n]);if(data.length<10)return;
-    const letterResets=detectLetterReset(data,2.0);
-    const comboResets=detectComboReset(data,2.0);
-    const letterEntries=Object.entries(letterResets);
-    const comboEntries=Object.entries(comboResets).slice(0,3);
-    if(letterEntries.length||comboEntries.length)anyReset=true;
-    letterEntries.forEach(([l,r])=>{
-      html+=`<div class="reset-alert-row"><span>🔄 [${n}H] Huruf <b style="color:var(--orange)">${l}</b> fase RESET — normal ~${r.avgGap} draw, sekarang sudah ${r.currentGap} draw (${r.severity}× lipat)</span></div>`;
-    });
-    comboEntries.forEach(([c,r])=>{
-      html+=`<div class="reset-alert-row"><span>🔄 [${n}H] Kombo <b style="color:var(--accent2)">${c}</b> fase RESET — normal ~${r.avgGap} draw, sekarang ${r.currentGap} draw (${r.severity}×)</span></div>`;
-    });
-  });
-  if(!anyReset)html+='<div class="empty" style="padding:8px">Belum ada fase reset terdeteksi</div>';
-
-  // CONFIDENCE CALIBRATION (backtest-based)
-  html+='<div class="divider"></div><div style="font-size:8px;letter-spacing:2px;color:var(--purple);margin-bottom:8px">CONFIDENCE CALIBRATION (backtest real)</div>';
-  html+='<div style="display:flex;gap:8px;flex-wrap:wrap">';
-  [2,3,4].forEach(n=>{
-    const data=vals(state[n]);
-    if(data.length<20){
-      html+=`<div class="calib-badge" style="opacity:0.5">${n}H: data kurang</div>`;
-      return;
-    }
-    const calib=calibrateConfidenceV3(n,15);
-    if(calib.calibrated===null){
-      html+=`<div class="calib-badge" style="opacity:0.5">${n}H: belum cukup data</div>`;
-    } else {
-      const color=calib.calibrated>=60?'var(--green)':calib.calibrated>=35?'var(--gold)':'var(--red)';
-      html+=`<div class="calib-badge" style="border-color:${color};color:${color}">${n}H: <b>${calib.calibrated}%</b> (${calib.hit}/${calib.total} backtest)</div>`;
-    }
-  });
-  html+='</div>';
-  html+='<div class="engine-desc" style="margin-top:8px">Confidence ini dihitung dari walk-forward backtest real: dari semua draw historis, berapa% kasus result aktual benar-benar masuk Top-15 prediksi Engine V3.</div>';
-
-  html+='</div>';
-  html+=renderEvolutionPanel();
-  return html;
 }
 
 function renderEvolutionPanel(){
@@ -6754,7 +5507,7 @@ function uniRouteNormal(val,n,inp){
   // Kalau tanggal yang dipilih adalah tanggal lampau, selalu masuk sebagai data
   // historis biasa (bukan hasil live) — supaya tidak salah tercatat sebagai
   // jawaban dari prediksi hari ini.
-  const hasPendingPred=!isBackdate&&ps.candidates.length>0&&ps.results.length<PRED_RESULT_LIMIT;
+  const hasPendingPred=false; // PRED V1/V2 RESULT hanya dari tab masing-masing
 
   const lastDate=getLastInputDate(n);
   const today=nowTs();
@@ -6773,7 +5526,7 @@ function uniRouteNormal(val,n,inp){
       ps.results.push({val,isJp,hitIdx,ts:nowTs()});
       ps.status=ps.candidates.map(c=>c===val?'jp':'zonk');
       savePredState(n);
-      histState[n].push({date:ps.date,candidates:[...ps.candidates],result:val,jp:isJp,engineVersion:ps.engineVersion});
+      histState[n].push({date:ps.date,raw:ps.raw||predRawInput[n]||'',candidates:[...ps.candidates],result:val,jp:isJp,engineVersion:ps.engineVersion});
       saveHistState(n);
       state[n].push({v:val,ts:nowTs(),putaran:vals(state[n]).length+1,d:todayISO()});
       saveData(n,state[n]);
@@ -6893,7 +5646,7 @@ function uniRouteKembar(val,type,inp){
   const dateInp=$id('uniDate');
   const pickedDate=dateInp?dateInp.value:'';
   const isBackdate=!!(pickedDate&&pickedDate<todayISO());
-  const hasPendingPred=!isBackdate&&ps.candidates.length>0&&ps.results.length<PRED_RESULT_LIMIT;
+  const hasPendingPred=false; // PRED V1/V2 RESULT hanya dari tab masing-masing
   const lastDate=getLastKembarDate(type);
   const today=nowTs();
   const isRepeat=kState[type].includes(val);
@@ -7554,10 +6307,11 @@ function renderPred(n){
       <input type="date" class="uni-date-input" id="predDate${n}" value="${todayISO()}" max="${todayISO()}" oninput="predDateChanged(${n})">
       <span class="uni-date-hint" id="predDateHint${n}"></span>
     </div>
+    <div class="input-section" style="margin-bottom:8px;border-color:var(--gold)"><div class="input-title" style="color:var(--gold)">🔢 RAW DATA PRED V1 (MANUAL)</div><div style="font-size:8px;color:var(--dim);margin-bottom:6px">RAW milik PRED V1 sendiri — tidak mengambil dari HARIAN/PRED V2.</div><div class="result-input-row"><input class="result-input" id="predRawInp${n}" maxlength="8" inputmode="numeric" placeholder="8 digit RAW" value="${predRawInput[n]||''}" oninput="predRawInput[${n}]=this.value.replace(/\D/g,'').slice(0,8);this.value=predRawInput[${n}]"><span style="font-size:8px;color:var(--dim)">${(predRawInput[n]||'').length}/8</span></div></div>
     <button class="btn-generate" id="btnGen${n}" onclick="handleGeneratePred(${n})" ${locked?'disabled':''}>
       ${locked?`✓ PREDIKSI TERKUNCI`:'⚡ GENERATE PREDIKSI (15 KANDIDAT)'}
     </button>
-    <button class="btn btn-undo" id="btnBackfill${n}" style="width:100%;margin-top:8px;font-size:9px;border-color:var(--gold);color:var(--gold)" onclick="handleRunFullBackfill('btnBackfill${n}')">🗂️ BACKFILL SEMUA DATA LAMPAU (2H/3H/4H/KMB)</button>
+    
     ${locked&&!allDone?`<div class="locked-notice">Terkunci. Submit result aktual (<span style="color:var(--gold);font-weight:700">${resultCount}/${PRED_RESULT_LIMIT}</span> dilakukan) — generate baru terbuka setelah ${PRED_RESULT_LIMIT}x.</div>`:''}
     ${allDone?`<div class="locked-notice" style="color:var(--green);border-color:rgba(0,230,118,0.3);background:rgba(0,230,118,0.05)">✓ Limit ${PRED_RESULT_LIMIT}x tercapai. Generate baru tersedia.</div>`:''}
   </div>`;
@@ -7597,16 +6351,14 @@ function renderPred(n){
   // sini. Dinamis: sejumlah raw yg benar2 ada hari ini (1 atau 2 slot per
   // sesi, ikut apa adanya, tidak dipaksa 2).
   // ============================================================
-  html+=_renderPredPerSlotToday(n,cc);
-  html+=_renderPredPerSlotFullHistory(n,cc);
 
   if(ps.candidates.length>0){
     const lastResult=ps.results.length?ps.results[ps.results.length-1]:null;
     let comboLookup={};
     try{scoreCandidatesCombined(n,ALL[n].length).forEach(c=>{comboLookup[c.cand]=c;});}catch(e){}
-    const draftToday=(rawDraft&&rawDraft.date===todayISO())?rawDraft.vals:null;
+    const draftToday=null;
     const consensus=getConsensusSet(n);
-    html+=`<div style="font-family:'Orbitron',monospace;font-size:8px;letter-spacing:3px;color:var(--gold);margin-bottom:8px">15 KANDIDAT PREDIKSI (V2+V3 sekaligus) — hasil analisa data historis, bukan acak</div>`;
+    html+=`<div style="font-family:'Orbitron',monospace;font-size:8px;letter-spacing:3px;color:var(--gold);margin-bottom:8px">15 KANDIDAT PREDIKSI PRED V1 — hasil analisa data historis, bukan acak</div>`;
     if(draftToday){
       html+=`<div style="font-size:8px;color:var(--green);margin-bottom:6px">🔢 Data mentah hari ini sudah masuk — kandidat di bawah dicocokkan ke digit mentahnya (per slot), jadi bukan tebakan buta.</div>`;
     }
@@ -7672,7 +6424,6 @@ function renderPred(n){
       <div class="result-msg" id="resMsgPred${n}"></div>
     </div>`;
   }
-  html+=renderPosCandPanel(n);
   html+=renderHistTable(n);
   setHTML('pred-sub-'+n,html);
 }
@@ -7705,10 +6456,11 @@ function renderPredV2(n){
       <input type="date" class="uni-date-input" id="predV2Date${n}" value="${todayISO()}" max="${todayISO()}" oninput="predDateChangedV2(${n})">
       <span class="uni-date-hint" id="predV2DateHint${n}"></span>
     </div>
+    <div class="input-section" style="margin-bottom:8px;border-color:#7ee787"><div class="input-title" style="color:#7ee787">🔢 RAW DATA PRED V2 (MANUAL)</div><div style="font-size:8px;color:var(--dim);margin-bottom:6px">RAW milik PRED V2 sendiri — tidak mengambil dari HARIAN/PRED V1.</div><div class="result-input-row"><input class="result-input" id="predRawV2Inp${n}" maxlength="8" inputmode="numeric" placeholder="8 digit RAW" value="${predRawInputV2[n]||''}" oninput="predRawInputV2[${n}]=this.value.replace(/\D/g,'').slice(0,8);this.value=predRawInputV2[${n}]"><span style="font-size:8px;color:var(--dim)">${(predRawInputV2[n]||'').length}/8</span></div></div>
     <button class="btn-generate" id="btnGenV2${n}" onclick="handleGeneratePredV2(${n})" ${locked?'disabled':''}>
       ${locked?`✓ PREDIKSI TERKUNCI`:'⚡ GENERATE PREDIKSI (15 KANDIDAT)'}
     </button>
-    <button class="btn btn-undo" id="btnBackfillV2${n}" style="width:100%;margin-top:8px;font-size:9px;border-color:var(--gold);color:var(--gold)" onclick="handleRunFullBackfillV2('btnBackfillV2${n}')">🗂️ BACKFILL SEMUA DATA LAMPAU (2H/3H/4H)</button>
+    
     ${locked&&!allDone?`<div class="locked-notice">Terkunci. Submit result aktual (<span style="color:var(--gold);font-weight:700">${resultCount}/${PRED_RESULT_LIMIT}</span> dilakukan) — generate baru terbuka setelah ${PRED_RESULT_LIMIT}x.</div>`:''}
     ${allDone?`<div class="locked-notice" style="color:var(--green);border-color:rgba(0,230,118,0.3);background:rgba(0,230,118,0.05)">✓ Limit ${PRED_RESULT_LIMIT}x tercapai. Generate baru tersedia.</div>`:''}
   </div>`;
@@ -7734,8 +6486,6 @@ function renderPredV2(n){
     </div>`;
   }
 
-  html+=_renderPredPerSlotTodayV2(n,cc);
-  html+=_renderPredPerSlotFullHistoryV2(n,cc);
 
   if(ps.candidates.length>0){
     const lastResult=ps.results.length?ps.results[ps.results.length-1]:null;
@@ -7746,7 +6496,7 @@ function renderPredV2(n){
       const mn=Math.min(...scores),mx=Math.max(...scores);
       full.forEach(c=>{comboLookup[c.cand]={...c,pct:mx>mn?Math.round((c.score-mn)/(mx-mn)*100):50};});
     }catch(e){}
-    const draftToday=(rawDraft&&rawDraft.date===todayISO())?rawDraft.vals:null;
+    const draftToday=null;
     const consensus=getConsensusSetV2(n);
     html+=`<div style="font-family:'Orbitron',monospace;font-size:8px;letter-spacing:3px;color:var(--gold);margin-bottom:8px">15 KANDIDAT PREDIKSI (BATCH 2 — per-posisi) — hasil analisa data historis, bukan acak</div>`;
     if(draftToday){
@@ -7812,7 +6562,6 @@ function renderPredV2(n){
       <div class="result-msg" id="resMsgPredV2${n}"></div>
     </div>`;
   }
-  html+=renderPosCandPanel(n);
   html+=renderHistTableV2(n);
   setHTML('predv2-sub-'+n,html);
 }
@@ -7843,7 +6592,7 @@ function renderHistTable(n){
       return`<div class="acc-badge" style="border-color:var(--purple);color:var(--purple)">${v}: ${j}/${list.length} · ${a}%</div>`;
     }).join('')}</div>`;
   }
-  html+=`<table class="tbl"><thead><tr><th>TGL</th><th>KANDIDAT</th><th>RESULT</th><th>STATUS</th></tr></thead><tbody>`;
+  html+=`<table class="tbl"><thead><tr><th>TGL</th><th>RAW</th><th>KANDIDAT</th><th>RESULT</th><th>STATUS</th></tr></thead><tbody>`;
   [...hist].reverse().forEach(h=>{
     const isPending=h.result===null;
     const chips=h.candidates.map(c=>{
@@ -7851,7 +6600,7 @@ function renderHistTable(n){
       return`<span class="rw-chip ${isHit?'hit':''}">${isHit?'🏆 ':''}${c}</span>`;
     }).join('');
     const verTag=h.engineVersion?`<span style="font-size:7px;color:var(--purple);border:1px solid var(--purple);border-radius:6px;padding:1px 4px;margin-left:4px">${h.engineVersion}</span>`:'';
-    html+=`<tr><td style="color:var(--dim);font-size:8px;white-space:nowrap">${isoToDisplay(h.date)}${verTag}${h.session?`<br><span style="color:var(--gold)">${h.session}${h.slot?' · slot'+h.slot:''}</span>`:''}</td><td><div class="rw-cands">${chips}</div></td>
+    html+=`<tr><td style="color:var(--dim);font-size:8px;white-space:nowrap">${isoToDisplay(h.date)}${verTag}${h.session?`<br><span style="color:var(--gold)">${h.session}${h.slot?' · slot'+h.slot:''}</span>`:''}</td><td style="font-family:monospace;font-size:9px;color:var(--gold)">${h.raw||'-'}</td><td style="font-family:monospace;font-size:9px;color:var(--gold)">${h.raw||'-'}</td><td><div class="rw-cands">${chips}</div></td>
     <td><span class="cand" style="font-size:11px">${isPending?'-':(h.result||'-')}</span></td>
     <td>${isPending?'<span class="status-zonk" style="color:var(--gold);border-color:var(--gold)">⏳ PENDING</span>':(h.jp?`<span class="status-jp">🏆 JP</span>`:'<span class="status-zonk">💀 ZONK</span>')}</td></tr>`;
   });
@@ -7869,14 +6618,14 @@ function renderHistTableV2(n){
   let html=`<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
     <div style="font-family:'Orbitron',monospace;font-size:8px;letter-spacing:2px;color:var(--dim)">RIWAYAT PRED HISTORIS BATCH 2 (1 set/hari -- lihat "PRED PER-SLOT — BATCH 2" di atas utk versi per-slot)</div>
     <div class="acc-badge">JP: ${jps}/${total} · ${acc}%</div></div>`;
-  html+=`<table class="tbl"><thead><tr><th>TGL</th><th>KANDIDAT</th><th>RESULT</th><th>STATUS</th></tr></thead><tbody>`;
+  html+=`<table class="tbl"><thead><tr><th>TGL</th><th>RAW</th><th>KANDIDAT</th><th>RESULT</th><th>STATUS</th></tr></thead><tbody>`;
   [...hist].reverse().forEach(h=>{
     const isPending=h.result===null;
     const chips=h.candidates.map(c=>{
       const isHit=!isPending&&h.jp&&c===h.result;
       return`<span class="rw-chip ${isHit?'hit':''}">${isHit?'🏆 ':''}${c}</span>`;
     }).join('');
-    html+=`<tr><td style="color:var(--dim);font-size:8px;white-space:nowrap">${isoToDisplay(h.date)}${h.session?`<br><span style="color:var(--gold)">${h.session}${h.slot?' · slot'+h.slot:''}</span>`:''}</td><td><div class="rw-cands">${chips}</div></td>
+    html+=`<tr><td style="color:var(--dim);font-size:8px;white-space:nowrap">${isoToDisplay(h.date)}${h.session?`<br><span style="color:var(--gold)">${h.session}${h.slot?' · slot'+h.slot:''}</span>`:''}</td><td style="font-family:monospace;font-size:9px;color:var(--gold)">${h.raw||'-'}</td><td style="font-family:monospace;font-size:9px;color:var(--gold)">${h.raw||'-'}</td><td><div class="rw-cands">${chips}</div></td>
     <td><span class="cand" style="font-size:11px">${isPending?'-':(h.result||'-')}</span></td>
     <td>${isPending?'<span class="status-zonk" style="color:var(--gold);border-color:var(--gold)">⏳ PENDING</span>':(h.jp?`<span class="status-jp">🏆 JP</span>`:'<span class="status-zonk">💀 ZONK</span>')}</td></tr>`;
   });
@@ -7974,19 +6723,17 @@ function askOracleAllPredictions(){
 }
 
 function handleGeneratePred(n){
-  const dInp=$id('predDate'+n);
-  const pickedDate=dInp?dInp.value:'';
-  if(pickedDate&&pickedDate<todayISO()){
-    generatePredBackdate(n,pickedDate);
-  }else{
-    generatePred(n);
-  }
+  const dInp=$id('predDate'+n);const pickedDate=dInp?dInp.value:'';
+  const el=$id('predRawInp'+n);const raw=(el?el.value:predRawInput[n]||'').trim();
+  if(!/^\d{8}$/.test(raw)){showMsg(n,'⚠ Masukkan RAW DATA 8 digit PRED V1 terlebih dahulu.','warn');return;}
+  predRawInput[n]=raw;
+  if(pickedDate&&pickedDate<todayISO())generatePredBackdate(n,pickedDate,raw);else generatePred(n,false,raw);
 }
 
 // Generate kandidat untuk tanggal yang sudah lewat — TIDAK menyentuh
 // predState[n] sama sekali (prediksi live hari ini tetap aman/tidak terkunci).
 // Hasilnya cuma tersimpan di histState begitu result-nya disubmit.
-function generatePredBackdate(n,dateISO){
+function generatePredBackdate(n,dateISO,rawData){
   const bp=backdatePred[n];
   if(bp&&bp.date===dateISO){
     // Sudah pernah digenerate untuk tanggal yang sama persis — terkunci
@@ -8000,16 +6747,7 @@ function generatePredBackdate(n,dateISO){
   const tagged=injectPositionalCandidates(fullBd,diversifyCandidates(fullBd,15),n,dateISO);
   const candidates=tagged.map(s=>s.cand);
   const candidateSources=tagged.map(s=>s.source||'core');
-  backdatePred[n]={date:dateISO,candidates,candidateSources,engineVersion:getEngineMode()};
-  // Request 2026-08: kalau data historis utk tanggal ini SUDAH ADA di pool
-  // (mis. sudah dientri lewat Harian sebelumnya), langsung catat result-nya
-  // otomatis -- tidak perlu ketik ulang manual. Kalau ada >1 kandidat aktual
-  // di tanggal yg sama (beda sesi/slot), tampilkan sbg pilihan tap (bukan
-  // ditebak sepihak) supaya user yang pastikan yang mana.
-  const found=_actualEntriesForDate(n,dateISO);
-  const distinctVals=[...new Set(found.map(e=>e.v))];
-  if(distinctVals.length===1){_autoRecordBackdateResult(n,distinctVals[0]);return;}
-  if(found.length>1)backdatePred[n].suggestedResults=found;
+  backdatePred[n]={date:dateISO,raw:rawData||'',candidates,candidateSources,engineVersion:getEngineMode()};
   renderPred(n);
 }
 
@@ -8018,7 +6756,7 @@ function _autoRecordBackdateResult(n,val){
   if(!bp)return;
   const hitIdx=bp.candidates.indexOf(val);
   const isJp=hitIdx>=0;
-  histState[n].push({date:bp.date,candidates:[...bp.candidates],result:val,jp:isJp,engineVersion:bp.engineVersion});
+  histState[n].push({date:bp.date,raw:bp.raw||'',candidates:[...bp.candidates],result:val,jp:isJp,engineVersion:bp.engineVersion});
   saveHistState(n);
   _recordEngineAudit(n,val,bp,hitIdx,isJp);
   backdatePred[n]=null;
@@ -8040,7 +6778,7 @@ function submitBackdateResult(n){
   const showErr=(t)=>{if(msgEl){msgEl.textContent='⚠ '+t;msgEl.className='result-msg show zonk';}};
 
   if(raw==='ZONK'){
-    histState[n].push({date:bp.date,candidates:[...bp.candidates],result:'ZONK',jp:false,engineVersion:bp.engineVersion});
+    histState[n].push({date:bp.date,raw:bp.raw||'',candidates:[...bp.candidates],result:'ZONK',jp:false,engineVersion:bp.engineVersion});
     saveHistState(n);
     _recordEngineAudit(n,'ZONK',bp,-1,false);
     backdatePred[n]=null;
@@ -8055,15 +6793,11 @@ function submitBackdateResult(n){
   const hitIdx=bp.candidates.indexOf(raw);
   const isJp=hitIdx>=0;
 
-  histState[n].push({date:bp.date,candidates:[...bp.candidates],result:raw,jp:isJp,engineVersion:bp.engineVersion});
+  histState[n].push({date:bp.date,raw:bp.raw||'',candidates:[...bp.candidates],result:raw,jp:isJp,engineVersion:bp.engineVersion});
   saveHistState(n);
   _recordEngineAudit(n,raw,bp,hitIdx,isJp);
 
-  // Ikut masukkan ke data historis utama 2H/3H/4H, disisipkan sesuai tanggal
-  undoStack[n].push(_cloneStateArr(state[n]));
-  if(undoStack[n].length>10)undoStack[n].shift();
-  insertEntrySorted(state[n],{v:raw},bp.date);
-  saveData(n,state[n]);
+
 
   backdatePred[n]=null;
   renderAll(n);renderPred(n);if(typeof renderHariHist==="function")renderHariHist();if(typeof renderHariLengkap==="function")renderHariLengkap();renderEval(n);renderDash();renderNotifBanner();
@@ -8075,7 +6809,7 @@ function submitBackdateResult(n){
 // pool terbaru. Force TETAP menghormati lock kalau sudah ada result asli
 // yang disubmit hari ini (results.length>0) -- tidak pernah menimpa
 // kandidat yang sudah dipakai buat validasi.
-function generatePred(n,force){
+function generatePred(n,force,rawData){
   const today=todayStr();
   const ps=predState[n];
   const isTodayLocked=(ps.date===today&&ps.candidates.length>0&&(ps.results||[]).length<PRED_RESULT_LIMIT);
@@ -8084,7 +6818,7 @@ function generatePred(n,force){
   const tagged=injectPositionalCandidates(fullLive,diversifyCandidates(fullLive,15),n,null);
   const candidates=tagged.map(s=>s.cand);
   const candidateSources=tagged.map(s=>s.source||'core');
-  predState[n]={date:today,candidates,candidateSources,status:candidates.map(()=>'pending'),result:null,results:[],engineVersion:getEngineMode()};
+  predState[n]={date:today,raw:rawData||predRawInput[n]||'',candidates,candidateSources,status:candidates.map(()=>'pending'),result:null,results:[],engineVersion:getEngineMode()};
   savePredState(n);
   _histUpsertPending(n,predState[n]);
   renderPred(n);
@@ -8116,15 +6850,11 @@ function submitResult(n){
   // (mis. sudah pernah disubmit result lain hari ini), push entri baru.
   const pendIdx=histState[n].findIndex(h=>h.date===ps.date&&h.result===null);
   if(pendIdx>=0){histState[n][pendIdx].result=val;histState[n][pendIdx].jp=isJp;}
-  else histState[n].push({date:ps.date,candidates:[...ps.candidates],result:val,jp:isJp,engineVersion:ps.engineVersion});
+  else histState[n].push({date:ps.date,raw:ps.raw||predRawInput[n]||'',candidates:[...ps.candidates],result:val,jp:isJp,engineVersion:ps.engineVersion});
   saveHistState(n);
   _recordEngineAudit(n,val,ps,hitIdx,isJp);
 
-  // Otomatis masukkan juga ke data utama 2H/3H/4H (riwayat keluar)
-  const isRepeatMain=vals(state[n]).includes(val);
-  state[n].push({v:val,ts:nowTs(),putaran:vals(state[n]).length+1,d:todayISO()});
-  saveData(n,state[n]);
-  updateMetaLearning(n); // Layer 5: auto-calibration setelah result aktual masuk
+
 
   renderAll(n);renderPred(n);if(typeof renderHariHist==="function")renderHariHist();if(typeof renderHariLengkap==="function")renderHariLengkap();renderEval(n);renderDash();
   inp.value='';
@@ -8160,15 +6890,13 @@ function showResMsg(n,text,type){
 // murni mencatat akurasinya sendiri (histStateV2/predStateV2.status).
 // ============================================================
 function handleGeneratePredV2(n){
-  const dInp=$id('predV2Date'+n);
-  const pickedDate=dInp?dInp.value:'';
-  if(pickedDate&&pickedDate<todayISO()){
-    generatePredBackdateV2(n,pickedDate);
-  }else{
-    generatePredV2(n);
-  }
+  const dInp=$id('predV2Date'+n);const pickedDate=dInp?dInp.value:'';
+  const el=$id('predRawV2Inp'+n);const raw=(el?el.value:predRawInputV2[n]||'').trim();
+  if(!/^\d{8}$/.test(raw)){showResMsgV2(n,'⚠ Masukkan RAW DATA 8 digit PRED V2 terlebih dahulu.','zonk');return;}
+  predRawInputV2[n]=raw;
+  if(pickedDate&&pickedDate<todayISO())generatePredBackdateV2(n,pickedDate,raw);else generatePredV2(n,false,raw);
 }
-function generatePredBackdateV2(n,dateISO){
+function generatePredBackdateV2(n,dateISO,rawData){
   const bp=backdatePredV2[n];
   if(bp&&bp.date===dateISO){
     showMsg(n,`⚠ Sudah ada prediksi untuk ${isoToDisplay(dateISO)} — submit result-nya dulu atau tap "Batalkan", atau ganti tanggal untuk generate baru.`,'warn');
@@ -8179,11 +6907,7 @@ function generatePredBackdateV2(n,dateISO){
   const tagged=injectPositionalCandidates(fullBd,diversifyCandidates(fullBd,15),n,dateISO);
   const candidates=tagged.map(s=>s.cand);
   const candidateSources=tagged.map(s=>s.source||'core');
-  backdatePredV2[n]={date:dateISO,candidates,candidateSources,engineVersion:'batch2'};
-  const found=_actualEntriesForDate(n,dateISO);
-  const distinctVals=[...new Set(found.map(e=>e.v))];
-  if(distinctVals.length===1){_autoRecordBackdateResultV2(n,distinctVals[0]);return;}
-  if(found.length>1)backdatePredV2[n].suggestedResults=found;
+  backdatePredV2[n]={date:dateISO,raw:rawData||'',candidates,candidateSources,engineVersion:'batch2'};
   renderPredV2(n);
 }
 function _autoRecordBackdateResultV2(n,val){
@@ -8191,7 +6915,7 @@ function _autoRecordBackdateResultV2(n,val){
   if(!bp)return;
   const hitIdx=bp.candidates.indexOf(val);
   const isJp=hitIdx>=0;
-  histStateV2[n].push({date:bp.date,candidates:[...bp.candidates],result:val,jp:isJp,engineVersion:'batch2'});
+  histStateV2[n].push({date:bp.date,raw:bp.raw||'',candidates:[...bp.candidates],result:val,jp:isJp,engineVersion:'batch2'});
   saveHistStateV2(n);
   backdatePredV2[n]=null;
   renderPredV2(n);
@@ -8210,7 +6934,7 @@ function submitBackdateResultV2(n){
   const showErr=(t)=>{if(msgEl){msgEl.textContent='⚠ '+t;msgEl.className='result-msg show zonk';}};
 
   if(raw==='ZONK'){
-    histStateV2[n].push({date:bp.date,candidates:[...bp.candidates],result:'ZONK',jp:false,engineVersion:'batch2'});
+    histStateV2[n].push({date:bp.date,raw:bp.raw||'',candidates:[...bp.candidates],result:'ZONK',jp:false,engineVersion:'batch2'});
     saveHistStateV2(n);
     backdatePredV2[n]=null;
     renderPredV2(n);
@@ -8223,12 +6947,12 @@ function submitBackdateResultV2(n){
 
   const hitIdx=bp.candidates.indexOf(raw);
   const isJp=hitIdx>=0;
-  histStateV2[n].push({date:bp.date,candidates:[...bp.candidates],result:raw,jp:isJp,engineVersion:'batch2'});
+  histStateV2[n].push({date:bp.date,raw:bp.raw||'',candidates:[...bp.candidates],result:raw,jp:isJp,engineVersion:'batch2'});
   saveHistStateV2(n);
   backdatePredV2[n]=null;
   renderPredV2(n);
 }
-function generatePredV2(n,force){
+function generatePredV2(n,force,rawData){
   const today=todayStr();
   const ps=predStateV2[n];
   const isTodayLocked=(ps.date===today&&ps.candidates.length>0&&(ps.results||[]).length<PRED_RESULT_LIMIT);
@@ -8237,7 +6961,7 @@ function generatePredV2(n,force){
   const tagged=injectPositionalCandidates(fullLive,diversifyCandidates(fullLive,15),n,null);
   const candidates=tagged.map(s=>s.cand);
   const candidateSources=tagged.map(s=>s.source||'core');
-  predStateV2[n]={date:today,candidates,candidateSources,status:candidates.map(()=>'pending'),result:null,results:[],engineVersion:'batch2'};
+  predStateV2[n]={date:today,raw:rawData||predRawInputV2[n]||'',candidates,candidateSources,status:candidates.map(()=>'pending'),result:null,results:[],engineVersion:'batch2'};
   savePredStateV2(n);
   _histUpsertPendingV2(n,predStateV2[n]);
   renderPredV2(n);
@@ -8265,7 +6989,7 @@ function submitResultV2(n){
 
   const pendIdx=histStateV2[n].findIndex(h=>h.date===ps.date&&h.result===null);
   if(pendIdx>=0){histStateV2[n][pendIdx].result=val;histStateV2[n][pendIdx].jp=isJp;}
-  else histStateV2[n].push({date:ps.date,candidates:[...ps.candidates],result:val,jp:isJp,engineVersion:'batch2'});
+  else histStateV2[n].push({date:ps.date,raw:ps.raw||predRawInputV2[n]||'',candidates:[...ps.candidates],result:val,jp:isJp,engineVersion:'batch2'});
   saveHistStateV2(n);
 
   renderPredV2(n);
@@ -8359,7 +7083,7 @@ function _autoRecordBackdateResultKmb(val){
   if(!type)return; // bukan pola kembar -- jangan auto-klaim, biarkan manual
   const hitIdx=bp.candidates.indexOf(val);
   const isJp=hitIdx>=0;
-  histState.KMB.push({date:bp.date,candidates:[...bp.candidates],result:val,jp:isJp,engineVersion:bp.engineVersion});
+  histState.KMB.push({date:bp.date,raw:bp.raw||'',candidates:[...bp.candidates],result:val,jp:isJp,engineVersion:bp.engineVersion});
   saveHistState('KMB');
   _recordEngineAudit('KMB',val,bp,hitIdx,isJp);
   backdatePred.KMB=null;
@@ -8383,7 +7107,7 @@ function submitBackdateResultKmb(){
   const showErr=(t)=>{if(msgEl){msgEl.textContent='⚠ '+t;msgEl.className='result-msg show zonk';}};
 
   if(raw==='ZONK'){
-    histState.KMB.push({date:bp.date,candidates:[...bp.candidates],result:'ZONK',jp:false,engineVersion:bp.engineVersion});
+    histState.KMB.push({date:bp.date,raw:bp.raw||'',candidates:[...bp.candidates],result:'ZONK',jp:false,engineVersion:bp.engineVersion});
     saveHistState('KMB');
     _recordEngineAudit('KMB','ZONK',bp,-1,false);
     backdatePred.KMB=null;
@@ -8399,7 +7123,7 @@ function submitBackdateResultKmb(){
   const hitIdx=bp.candidates.indexOf(raw);
   const isJp=hitIdx>=0;
 
-  histState.KMB.push({date:bp.date,candidates:[...bp.candidates],result:raw,jp:isJp,engineVersion:bp.engineVersion});
+  histState.KMB.push({date:bp.date,raw:bp.raw||'',candidates:[...bp.candidates],result:raw,jp:isJp,engineVersion:bp.engineVersion});
   saveHistState('KMB');
   _recordEngineAudit('KMB',raw,bp,hitIdx,isJp);
 
@@ -8456,7 +7180,7 @@ function submitResultKmb(){
 
   const pendIdxKmb=histState.KMB.findIndex(h=>h.date===ps.date&&h.result===null);
   if(pendIdxKmb>=0){histState.KMB[pendIdxKmb].result=val;histState.KMB[pendIdxKmb].jp=isJp;}
-  else histState.KMB.push({date:ps.date,candidates:[...ps.candidates],result:val,jp:isJp,engineVersion:ps.engineVersion});
+  else histState.KMB.push({date:ps.date,raw:ps.raw||predRawInput[n]||'',candidates:[...ps.candidates],result:val,jp:isJp,engineVersion:ps.engineVersion});
   saveHistState('KMB');
   _recordEngineAudit('KMB',val,ps,hitIdx,isJp);
 
@@ -8497,7 +7221,7 @@ function renderPredKmb(){
       <span id="predDateHintKMB" style="font-size:8px"></span>
     </div>
     <button class="btn-generate" style="background:linear-gradient(135deg,var(--purple),var(--accent2))" onclick="handleGeneratePredKmb()" ${!isBackdate&&hasPendingPred?'disabled':''}>${isBackdate?'⏪ GENERATE (TANGGAL LAMPAU)':(ps.candidates.length>0?'🔄 GENERATE ULANG (10 KANDIDAT)':'⚡ GENERATE PREDIKSI (10 KANDIDAT)')}</button>
-    <button class="btn btn-undo" id="btnBackfillKMB" style="width:100%;margin-top:8px;font-size:9px;border-color:var(--gold);color:var(--gold)" onclick="handleRunFullBackfill('btnBackfillKMB')">🗂️ BACKFILL SEMUA DATA LAMPAU (2H/3H/4H/KMB)</button>
+    
     <div id="kmbPredKmbGenMsg" class="msg"></div>
   </div>`;
 
@@ -8594,7 +7318,7 @@ function renderPredKmb(){
 // ============================================================
 // TAB AI PRED — metode prediksi KEDUA, terpisah total dari tab PRED.
 //
-// Tab PRED (V2+V3) = rumus tetap: skor semua permutasi huruf dari
+// Tab PRED V1 = rumus tetap: skor semua permutasi huruf dari
 // frekuensi/gap/markov/cycle/dst pada histori KOMBINASI HURUF.
 //
 // AI PRED jalan pikirannya beda — basis utamanya adalah PROVENANCE
@@ -8687,7 +7411,7 @@ async function generateAiPred(){
     ctx=buildTrackerContext();
   }catch(e){/* tetap lanjut walau salah satu gagal dihitung */}
 
-  const prompt=`Kamu bertindak sebagai "AI PRED" — metode prediksi KEDUA yang terpisah dari metode statistik formula tetap (Engine V2+V3) yang sudah ada di tab PRED tracker ini. Bedanya: AI PRED basisnya PROVENANCE DIGIT MENTAH (posisi mana di raw 8-digit yang historisnya paling sering jadi sumber huruf pemenang, dan dari slot sendiri/tetangga) digabung penalaranmu sendiri — bukan cuma skor linear.
+  const prompt=`Kamu bertindak sebagai "AI PRED" — metode prediksi KEDUA yang terpisah dari metode statistik PRED V1 yang sudah ada di tab PRED tracker ini. Bedanya: AI PRED basisnya PROVENANCE DIGIT MENTAH (posisi mana di raw 8-digit yang historisnya paling sering jadi sumber huruf pemenang, dan dari slot sendiri/tetangga) digabung penalaranmu sendiri — bukan cuma skor linear.
 
 DATA PROVENANCE POSISI (dihitung asli dari histori log Harian; posisi 1-8 = label huruf A-H; makin besar angkanya makin sering posisi itu jadi sumber huruf pemenang):
 ${JSON.stringify(rawStats,null,1)}
@@ -8695,7 +7419,7 @@ ${JSON.stringify(rawStats,null,1)}
 DATA MENTAH HARI INI (kalau ada, digit asli yang bisa langsung dipetakan ke huruf per posisi — posisi1=A...posisi8=H):
 ${draftToday?JSON.stringify(draftToday,null,1):'belum ada data mentah untuk hari ini — pakai histori provenance & pola engine sebagai gantinya, sebutkan keterbatasan ini di reasoning'}
 
-KANDIDAT KUAT DARI ENGINE STATISTIK (V2+V3 gabungan, HANYA referensi tambahan, jangan jadi patokan utama): 2D:[${combined2.join(', ')||'-'}] · 3D:[${combined3.join(', ')||'-'}] · 4D:[${combined4.join(', ')||'-'}] · KEMBAR gabungan lintas tipe (PAIR/DOUBLE/TRIPLE/QUAD dinormalisasi jadi 1 ranking):[${combinedKmb.join(', ')||'-'}]
+KANDIDAT KUAT DARI PRED V1 (HANYA referensi tambahan, jangan jadi patokan utama): 2D:[${combined2.join(', ')||'-'}] · 3D:[${combined3.join(', ')||'-'}] · 4D:[${combined4.join(', ')||'-'}] · KEMBAR gabungan lintas tipe (PAIR/DOUBLE/TRIPLE/QUAD dinormalisasi jadi 1 ranking):[${combinedKmb.join(', ')||'-'}]
 
 KONTEKS TRACKER LENGKAP (histori semua mode, kembar, DNA, evolution, akurasi):
 ${JSON.stringify(ctx,null,1)}
@@ -11134,9 +9858,11 @@ function resetSemuaDataHistoris(){
     predState[n]={date:null,candidates:[],status:[],result:null,results:[]};
     savePredState(n);
     histState[n]=[];
-    saveHistState(n);
+    try{SBData.clearPredV1History(n);}catch(e){}
     saveFavs(n,new Set());
   });
+
+  [2,3,4].forEach(n=>{histStateV2[n]=[];try{SBData.clearPredV2History(n);}catch(e){}});
 
   // 1b. Prediksi & riwayat KMB (gap lama -- sebelumnya TIDAK ikut direset
   // di sini walau pool Kembar mentahnya (kState/kMeta) sudah direset di
@@ -11302,7 +10028,7 @@ function handleImport(n,input){
 // ============================================================
 // TAB & SECTION SWITCHING (induk semua tab)
 // ============================================================
-const ALL_TABS=[2,3,4,'K','dash','harian','harilengkap','predgen','audit','eval','pred','predv2','predv3','aipred','analisa','rawanalisa','dna','export','harihist','ai','intel'];
+const ALL_TABS=[2,3,4,'K','dash','harian','harilengkap','predgen','audit','eval','pred','predv2','aipred','analisa','rawanalisa','dna','export','harihist','ai','intel'];
 function switchTab(n){
   ALL_TABS.forEach(t=>{
     const tab=$id('tab'+(typeof t==='number'?t:'-'+t))||$id('tab'+t);
@@ -11313,7 +10039,7 @@ function switchTab(n){
   const tabId=typeof n==='number'?'tab'+n:'tab-'+n;
   const tab=$id(tabId)||$id('tab'+n);
   const page=$id('page-'+n);
-  const classMap={K:'active-kembar',dash:'active-dash',harian:'active-harian',harilengkap:'active-harilengkap',predgen:'active-predgen',audit:'active-audit',pred:'active-pred',predv2:'active-pred',predv3:'active-pred',aipred:'active-aipred',analisa:'active-analisa',rawanalisa:'active-rawanalisa',dna:'active-dna',export:'active-export',harihist:'active-harihist',eval:'active-eval',ai:'active-ai',intel:'active-intel'};
+  const classMap={K:'active-kembar',dash:'active-dash',harian:'active-harian',harilengkap:'active-harilengkap',predgen:'active-predgen',audit:'active-audit',pred:'active-pred',predv2:'active-pred',aipred:'active-aipred',analisa:'active-analisa',rawanalisa:'active-rawanalisa',dna:'active-dna',export:'active-export',harihist:'active-harihist',eval:'active-eval',ai:'active-ai',intel:'active-intel'};
   if(tab)tab.className=classMap[n]?'tab '+classMap[n]:'tab active-'+n;
   if(page)page.classList.add('active');
 
@@ -11326,7 +10052,6 @@ function switchTab(n){
   else if(n==='audit'){renderAuditLog();}
   else if(n==='pred'){if(activePredSub==='KMB')renderPredKmb();else renderPred(activePredSub);}
   else if(n==='predv2'){renderPredV2(activePredSubV2);}
-  else if(n==='predv3'){renderPredV3();}
   else if(n==='aipred'){renderAiPred();}
   else if(n==='analisa'){renderAnalisa(activeAnalisaSub);}
   else if(n==='rawanalisa'){renderRawAnalisaLog();}
@@ -12143,7 +10868,7 @@ function renderKembar(type){
       h+=`<div style="display:flex;align-items:center;justify-content:space-between;margin:10px 0 8px">
         <div style="font-family:'Orbitron',monospace;font-size:8px;letter-spacing:2px;color:var(--dim)">RIWAYAT PREDIKSI ${type}</div>
         <div class="acc-badge" style="border-color:${tColor};color:${tColor};background:${tColor}15">JP: ${ak.jp}/${ak.total} · ${ak.pct}%</div></div>`;
-      h+=`<table class="tbl"><thead><tr><th>TGL</th><th>KANDIDAT</th><th>RESULT</th><th>STATUS</th></tr></thead><tbody>`;
+      h+=`<table class="tbl"><thead><tr><th>TGL</th><th>RAW</th><th>KANDIDAT</th><th>RESULT</th><th>STATUS</th></tr></thead><tbody>`;
       [...hist].reverse().forEach(hh=>{
         const chips=hh.candidates.map(c=>`<span class="rw-chip ${hh.jp&&c===hh.result?'hit':''}">${c}</span>`).join('');
         h+=`<tr><td style="color:var(--dim);font-size:8px;white-space:nowrap">${hh.date}</td><td><div class="rw-cands">${chips}</div></td>
@@ -12973,6 +11698,9 @@ async function boot(){
   const overlay=$id('bootOverlay');
   try{
     await _storageBootstrap();
+    // Histori PRED V1/V2 tidak lagi disimpan di localStorage. Hapus cache histori lama
+    // agar tidak ada dua sumber kebenaran; Supabase adalah satu-satunya sumber permanen.
+    try{['tah2_hist_2','tah2_hist_3','tah2_hist_4','tah2_histv2_2','tah2_histv2_3','tah2_histv2_4','tah2_backfill_done'].forEach(k=>localStorage.removeItem(k));}catch(e){}
 
     // --- RECOVERY MODE CHECK (Prioritas #7) — dilakukan SEBELUM data
     // dimuat ke state, supaya kalau ada masalah, kita tidak keburu
@@ -13002,11 +11730,11 @@ async function boot(){
     state[2]=await loadData(2);state[3]=await loadData(3);state[4]=await loadData(4);
     rawLog=await loadRawLog();
     predState[2]=loadPredState(2);predState[3]=loadPredState(3);predState[4]=loadPredState(4);predState.KMB=loadPredState('KMB');
-    histState[2]=loadHistState(2);histState[3]=loadHistState(3);histState[4]=loadHistState(4);histState.KMB=loadHistState('KMB');
+    histState[2]=await SBData.loadPredV1History(2);histState[3]=await SBData.loadPredV1History(3);histState[4]=await SBData.loadPredV1History(4);histState.KMB=[];
     // BATCH 2 (2026-08-27, permintaan user: tab "PRED V2" -- clone tampilan
     // 100% identik dgn tab PRED, cuma metode skoring kandidatnya beda, lihat
     // scoreCandidatesBatch2). Namespace storage terpisah total dari Batch 1.
-    [2,3,4].forEach(n=>{predStateV2[n]=loadPredStateV2(n);histStateV2[n]=loadHistStateV2(n);predSlotLogV2[n]=loadPredSlotLogV2(n);});
+    for(const n of [2,3,4]){predStateV2[n]=loadPredStateV2(n);histStateV2[n]=await SBData.loadPredV2History(n);predSlotLogV2[n]=loadPredSlotLogV2(n);}
 
     KMB_TYPES.forEach(t=>{kState[t]=kmbLoadByType(t);});
     KMB_TYPES.forEach(t=>{kMeta[t]=kmbLoadMeta(t);kmbAlignMeta(t);});
@@ -13058,9 +11786,6 @@ async function boot(){
     try{renderHarianLog();}catch(e){}
     try{renderHariHist();}catch(e){}
     try{renderHariLengkap();}catch(e){}
-    // GLOBAL TIMELINE + PRED V2 historical backfill: RAW adalah frontier master.
-    // Backfill hanya mengejar tanggal lampau yang sudah punya result; tidak mengubah raw/result.
-    try{getGlobalDataClock();renderHistoricalSyncPanel();setTimeout(()=>{try{runFullBackfill();}catch(eV1Backfill){};runPredV2HistoricalBackfill(true).then(()=>{try{renderHistoricalSyncPanel();}catch(eSyncPanel){}}).catch(()=>{});},250);}catch(eBackfill){}
     // AH Sync Foundation (Sprint 1) — inisialisasi status saja, TIDAK auto-sync.
     // Dibungkus try/catch + tidak di-await: kalau gagal/timeout, boot tracker
     // tidak boleh terpengaruh sama sekali.
@@ -13446,6 +12171,38 @@ const SBData=(function(){
     const{error:insErr}=await c.from('pred_hist_log').insert(rows);if(insErr)return{ok:false,reason:insErr.message};
     return{ok:true};
   }
+
+  // ---------- PRED V1/V2 HISTORY — permanen di Supabase, tanpa localStorage ----------
+  async function _loadIndependentPredHistory(table,mode){
+    const c=_client();if(!c)return[];const uid=await _uid();if(!uid)return[];
+    const modeKey=String(mode).match(/^\d$/)?String(mode)+'H':String(mode); const{data,error}=await c.from(table).select('id,date,mode,raw_data,candidates,result,results,status,engine_version,created_at,updated_at').eq('user_id',uid).eq('mode',modeKey).order('date',{ascending:true});
+    if(error)throw new Error('Gagal memuat '+table+': '+error.message);
+    return(data||[]).map(r=>({id:r.id,date:r.date,raw:r.raw_data||'',candidates:Array.isArray(r.candidates)?r.candidates:[],result:r.result??null,results:Array.isArray(r.results)?r.results:[],jp:r.status==='JP',status:r.status==='PENDING'?'pending':(r.status==='JP'?'jp':'zonk'),engineVersion:r.engine_version||('V'+(table==='pred_v1_history'?'1':'2'))}));
+  }
+  async function loadPredV1History(mode){return _loadIndependentPredHistory('pred_v1_history',mode);}
+  async function loadPredV2History(mode){return _loadIndependentPredHistory('pred_v2_history',mode);}
+  async function _upsertIndependentPredHistory(table,mode,arr,defaultVersion){
+    const c=_client();if(!c)return{ok:false,reason:'no_client'};const uid=await _uid();if(!uid)return{ok:false,reason:'no_user'};
+    const grouped=new Map();
+    (arr||[]).filter(e=>e&&e.date).forEach(e=>{
+      const key=String(e.date); const prev=grouped.get(key);
+      const er=Array.isArray(e.results)?[...e.results]:(e.result!=null?[{val:e.result,isJp:!!e.jp,hitIdx:e.hitIdx??null}]:[]);
+      if(!prev){grouped.set(key,{...e,results:er});return;}
+      if(e.raw)prev.raw=e.raw;
+      if(Array.isArray(e.candidates)&&e.candidates.length)prev.candidates=[...e.candidates];
+      prev.results.push(...er);
+      if(e.result!=null){prev.result=e.result;prev.jp=!!e.jp;prev.engineVersion=e.engineVersion||prev.engineVersion;}
+    });
+    const modeKey=String(mode).match(/^\d$/)?String(mode)+'H':String(mode);
+    const rows=[...grouped.values()].map(e=>({user_id:uid,date:e.date,mode:modeKey,raw_data:e.raw||'',candidates:e.candidates||[],result:e.result??null,results:e.results||[],status:e.result==null?'PENDING':(e.jp?'JP':'ZONK'),engine_version:e.engineVersion||defaultVersion,updated_at:new Date().toISOString()}));
+    if(!rows.length)return{ok:false,reason:'empty_history'};
+    const{error}=await c.from(table).upsert(rows,{onConflict:'user_id,date,mode'});
+    if(error)return{ok:false,reason:error.message};return{ok:true};
+  }
+  async function upsertPredV1History(mode,arr){return _upsertIndependentPredHistory('pred_v1_history',mode,arr,'V1');}
+  async function upsertPredV2History(mode,arr){return _upsertIndependentPredHistory('pred_v2_history',mode,arr,'V2');}
+  async function clearPredV1History(mode){const c=_client();if(!c)return{ok:false,reason:'no_client'};const uid=await _uid();if(!uid)return{ok:false,reason:'no_user'};const modeKey=String(mode).match(/^\d$/)?String(mode)+'H':String(mode);const{error}=await c.from('pred_v1_history').delete().eq('user_id',uid).eq('mode',modeKey);return error?{ok:false,reason:error.message}:{ok:true};}
+  async function clearPredV2History(mode){const c=_client();if(!c)return{ok:false,reason:'no_client'};const uid=await _uid();if(!uid)return{ok:false,reason:'no_user'};const modeKey=String(mode).match(/^\d$/)?String(mode)+'H':String(mode);const{error}=await c.from('pred_v2_history').delete().eq('user_id',uid).eq('mode',modeKey);return error?{ok:false,reason:error.message}:{ok:true};}
 
   // ---------- ORACLE AI (pengganti tah2_aipred_state/tah2_aipred_hist) ----------
   // aiPredState adalah 1 objek GLOBAL (bukan per-mode) -> disimpan sbg 1 baris
@@ -14755,10 +13512,9 @@ const AHSyncEngine=(function(){
           2:(predState&&predState[2])||null,3:(predState&&predState[3])||null,
           4:(predState&&predState[4])||null,KMB:(predState&&predState.KMB)||null
         },
-        histState:{
-          2:(histState&&histState[2])||[],3:(histState&&histState[3])||[],
-          4:(histState&&histState[4])||[],KMB:(histState&&histState.KMB)||[]
-        },
+        // PRED V1/V2 history TIDAK masuk AHSyncEngine lagi — sumber tunggalnya
+        // tabel pred_v1_history / pred_v2_history. KMB tetap memakai jalur legacy.
+        histState:{2:[],3:[],4:[],KMB:(histState&&histState.KMB)||[]},
         aiPredHist:{
           2:(aiPredHist&&aiPredHist[2])||[],3:(aiPredHist&&aiPredHist[3])||[],
           4:(aiPredHist&&aiPredHist[4])||[],KMB:(aiPredHist&&aiPredHist.KMB)||[]
@@ -14797,13 +13553,13 @@ const AHSyncEngine=(function(){
     out.rawLog=_unionAppendOnly(localExt.rawLog,rx.rawLog,r=>r.date+'|'+r.session+'|'+r.slot)
       .filter(r=>!_deletedKeys.has(r.date+'|'+r.session+'|'+r.slot));
     try{rawLog=out.rawLog;saveRawLog();}catch(e){}
-    // histState per mode: unik per date+result+candidates
-    out.histState={};
-    [2,3,4,'KMB'].forEach(n=>{
-      const key=h=>h.date+'|'+h.result+'|'+(Array.isArray(h.candidates)?h.candidates.join(','):'');
-      out.histState[n]=_unionAppendOnly(localExt.histState[n],rx.histState&&rx.histState[n],key);
-      try{histState[n]=out.histState[n];saveHistState(n);}catch(e){}
-    });
+    // PRED V1/V2 history DIBUANG dari domain merge legacy — masing-masing
+    // sudah punya tabel Supabase independen. Hanya KMB yang tetap di jalur ini.
+    out.histState={2:[],3:[],4:[],KMB:[]};
+    const n='KMB';
+    const key=h=>h.date+'|'+h.result+'|'+(Array.isArray(h.candidates)?h.candidates.join(','):'');
+    out.histState.KMB=_unionAppendOnly(localExt.histState.KMB,rx.histState&&rx.histState.KMB,key);
+    try{histState.KMB=out.histState.KMB;saveHistState('KMB');}catch(e){}
     // aiPredHist per mode: unik per date+result
     out.aiPredHist={};
     [2,3,4,'KMB'].forEach(n=>{
@@ -15761,24 +14517,6 @@ const AHSyncEngine=(function(){
   }
 
   // PRED V2 HISTORICAL BACKFILL — fresh candidates, upsert per date/session/slot.
-  // PRED V3 BACKTEST AUDIT — fresh fusion HARIAN + PRED V1, per slot.
-  async function upsertPredV3BacktestAudit(arr){
-    if(!arr||!arr.length)return{ok:false,reason:'empty_v3_backtest'};
-    const c=_client();if(!c)return{ok:false,reason:'no_client'};
-    const uid=await _uid();if(!uid)return{ok:false,reason:'no_user'};
-    const rows=arr.map(e=>({user_id:uid,data_date:e.data_date,session:e.session||'',slot:e.slot||0,raw:e.raw||null,result:e.result||null,candidates4:e.candidates4||[],candidates3:e.candidates3||[],candidates2:e.candidates2||[],metrics:e.metrics||{},engine_version:e.engine_version||'PRED-V3-BACKTEST-v1'}));
-    const{error}=await c.from('pred_v3_backtest_audit').upsert(rows,{onConflict:'user_id,data_date,session,slot'});
-    if(error)return{ok:false,reason:error.message}; return{ok:true};
-  }
-
-  async function upsertPredV2BackfillAudit(arr){
-    if(!arr||!arr.length)return{ok:false,reason:'empty_v2_backfill'};
-    const c=_client();if(!c)return{ok:false,reason:'no_client'};
-    const uid=await _uid();if(!uid)return{ok:false,reason:'no_user'};
-    const rows=arr.map(e=>({user_id:uid,data_date:e.data_date,session:e.session,slot:e.slot,raw:e.raw||null,result:e.result||null,candidates4:e.candidates4||[],candidates3:e.candidates3||[],candidates2:e.candidates2||[],rank4:e.rank4??null,rank3:e.rank3??null,rank2:e.rank2??null,status4:e.status4||null,status3:e.status3||null,status2:e.status2||null,engine_version:e.engine_version||'PRED-V2-BACKFILL-v1'}));
-    const{error}=await c.from('pred_v2_backfill_audit').upsert(rows,{onConflict:'user_id,data_date,session,slot'});
-    if(error)return{ok:false,reason:error.message}; return{ok:true};
-  }
 
   // HARIAN RECALC AUDIT — append/upsert per (date,session,slot,version).
   // Tidak menyentuh raw_log/entries/prediction state.
@@ -15821,7 +14559,8 @@ const AHSyncEngine=(function(){
     // Sprint 7 (fondasi checksum versioning -- lihat catatan di _fetchServerStableChecksum)
     _buildCombinedChecksum,_fetchServerStableChecksum,CHECKSUM_VERSION,parseCombinedChecksum,
     upsertHarianRecalcAudit,
-    upsertPredV2BackfillAudit,upsertPredV3BacktestAudit,
+    loadPredV1History,upsertPredV1History,clearPredV1History,
+    loadPredV2History,upsertPredV2History,clearPredV2History,
     // Blueprint 2026-08 (reset total server, lihat resetSemuaDataHistoris)
     hardResetRemote,
     _TESTING_setClient,_TESTING_reset

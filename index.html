@@ -519,6 +519,7 @@ body.restore-lock-active button,body.restore-lock-active input[type="file"],body
   <div class="tab" id="tab4" onclick="switchTab(4)">4H<span class="tab-badge" id="tbadge4"></span></div>
   <div class="tab" id="tab-pred" onclick="switchTab('pred')">PRED</div>
   <div class="tab" id="tab-predv2" onclick="switchTab('predv2')" style="color:#7ee787">PRED V2</div>
+  <div class="tab" id="tab-predv3" onclick="switchTab('predv3')" style="color:#ffb74d">PRED V3</div>
   <div class="tab" id="tab-aipred" onclick="switchTab('aipred')" style="color:var(--purple)">🤖 AI PRED</div>
   <div class="tab" id="tab-intel" onclick="switchTab('intel')" style="color:#b98cff">🔎 DETAIL KANDIDAT</div>
   <div class="tab" id="tab-analisa" onclick="switchTab('analisa')">ANALISA</div>
@@ -590,6 +591,11 @@ body.restore-lock-active button,body.restore-lock-active input[type="file"],body
   <div class="subpage active" id="predv2-sub-2"></div>
   <div class="subpage" id="predv2-sub-3"></div>
   <div class="subpage" id="predv2-sub-4"></div>
+</div>
+
+<!-- ============ PRED V3 — FUSION HARIAN + PRED V1 (2026-08-28) ============ -->
+<div class="page" id="page-predv3">
+  <div id="predv3-content"></div>
 </div>
 
 <!-- ============ AI PRED (metode terpisah — data mentah + analisa histori, disusun Oracle) ============ -->
@@ -991,6 +997,7 @@ function renderHarian(){
   html+=`<button class="btn-uni-add" style="width:100%;margin-bottom:14px" onclick="submitHarian()">💾 SIMPAN SEMUA SESI HARI INI</button>`;
 
   html+=`<div class="divider"></div>
+  <div id="historicalSyncPanel"></div>
   <div style="font-size:9px;letter-spacing:2px;color:var(--purple);margin-bottom:7px">🗂 RIWAYAT INPUT HARIAN (semua data)</div>
   <div id="jejakPolaBatchBar" style="display:flex;align-items:center;gap:8px;margin-bottom:8px;font-size:9px;flex-wrap:wrap">
     <button class="btn btn-undo" style="padding:4px 10px;font-size:9px" onclick="batchComputeJejakPola()">🔍 Hitung Jejak Pola untuk semua histori</button>
@@ -1001,6 +1008,7 @@ function renderHarian(){
 
   setHTML('harian-content',html);
   harianDateChanged();
+  if($id('historicalSyncPanel'))renderHistoricalSyncPanel();
   renderHarianOracleBox();
   renderHarianRecalcBox();
   renderHarianLog();
@@ -1674,6 +1682,164 @@ function renderHarianPredBox(sessKey){
   box.innerHTML=h;
 }
 
+
+// ============================================================
+// GLOBAL HISTORICAL CLOCK + PRED V2 BACKFILL + PRED V3 FUSION (2026-08-28)
+// RAW_LOG adalah MASTER TIMELINE. Engine lain boleh tertinggal, tetapi tidak
+// boleh menjadikan tanggal tertinggal itu sebagai frontier global. Backfill
+// mengejar frontier RAW secara walk-forward; data asli tidak diubah.
+// ============================================================
+let GLOBAL_DATA_CLOCK={lastRawDate:null,firstRawDate:null,totalRawEntries:0,totalRawDates:0,checkedAt:null};
+let predV2BackfillLast=null;
+let predV3Last=null;
+const PRED_V2_BACKFILL_VERSION='PRED-V2-BACKFILL-v1';
+const PRED_V3_VERSION='PRED-V3-FUSION-v1';
+
+function getGlobalDataClock(){
+  const rows=(rawLog||[]).filter(r=>r&&r.date&&r.raw&&r.raw.length===8);
+  const dates=[...new Set(rows.map(r=>r.date))].sort();
+  GLOBAL_DATA_CLOCK={lastRawDate:dates.length?dates[dates.length-1]:null,firstRawDate:dates.length?dates[0]:null,totalRawEntries:rows.length,totalRawDates:dates.length,checkedAt:new Date().toISOString()};
+  return GLOBAL_DATA_CLOCK;
+}
+function _maxDate(arr,field='date'){
+  const ds=(arr||[]).map(x=>x&&x[field]).filter(Boolean).sort();
+  return ds.length?ds[ds.length-1]:null;
+}
+function validateHistoricalAlignment(){
+  const clock=getGlobalDataClock();
+  const report={master:clock,targets:{},ok:true};
+  const targets={
+    HARIAN:rawLog||[],
+    PRED_V1:[...(histState[2]||[]),...(histState[3]||[]),...(histState[4]||[])],
+    PRED_V2:[...(histStateV2[2]||[]),...(histStateV2[3]||[]),...(histStateV2[4]||[])],
+    KEMBAR:[...(typeof kHistState!=='undefined'&&kHistState)?Object.values(kHistState).flat():[]],
+    PRED_V3:predV3Last&&predV3Last.rows?predV3Last.rows:[]
+  };
+  Object.entries(targets).forEach(([name,arr])=>{
+    const d=_maxDate(arr); report.targets[name]={lastDate:d,aligned:!clock.lastRawDate||!d||d===clock.lastRawDate};
+    if(clock.lastRawDate&&d&&d!==clock.lastRawDate)report.ok=false;
+  });
+  return report;
+}
+function _v2ResultForMode(result,n){
+  if(!result||result==='ZONK')return null;
+  const L=result.length;
+  if(L===n)return result;
+  if(L>n&&L<=4)return result.slice(L-n);
+  return null;
+}
+function _v2CandidatesAt(n,dateISO){
+  const full=scoreCandidatesBatch2AsOf(n,ALL[n].length,dateISO);
+  const tagged=injectPositionalCandidates(full,diversifyCandidates(full,15),n,dateISO);
+  return tagged.map(x=>x.cand);
+}
+function _upsertHistV2Local(n,entry){
+  const arr=histStateV2[n]||[];
+  const key=(h)=>h&&h.date===entry.date&&h.session===entry.session&&h.slot===entry.slot;
+  const idx=arr.findIndex(key);
+  if(idx>=0)arr[idx]=entry;else arr.push(entry);
+  arr.sort((a,b)=>String(a.date||'').localeCompare(String(b.date||'')));
+  histStateV2[n]=arr;
+}
+async function runPredV2HistoricalBackfill(saveRemote=true){
+  const clock=getGlobalDataClock();
+  const source=[...(rawLog||[])].filter(r=>r&&r.date&&r.date<todayStr()&&r.raw&&r.raw.length===8&&r.result&&r.result!=='ZONK').sort((a,b)=>{
+    const ka=`${a.date}|${HARIAN_SESSION_ORDER[a.session]??9}|${a.slot||0}`;
+    const kb=`${b.date}|${HARIAN_SESSION_ORDER[b.session]??9}|${b.slot||0}`;return ka.localeCompare(kb);
+  });
+  const rows=[];
+  for(const r of source){
+    for(const n of [2,3,4]){
+      if(r.appliedTo&&!r.appliedTo.includes(n))continue;
+      const target=_v2ResultForMode(r.result,n); if(!target)continue;
+      const candidates=_v2CandidatesAt(n,r.date);
+      const rank=candidates.indexOf(target); const jp=rank>=0;
+      const row={date:r.date,session:r.session||'',slot:r.slot||0,raw:r.raw,result:r.result,mode:n,target,candidates,rank:jp?rank+1:null,jp,engineVersion:PRED_V2_BACKFILL_VERSION};
+      rows.push(row);
+      _upsertHistV2Local(n,{date:r.date,candidates,result:target,jp,session:r.session,slot:r.slot,engineVersion:PRED_V2_BACKFILL_VERSION});
+    }
+  }
+  [2,3,4].forEach(n=>saveHistStateV2(n));
+  predV2BackfillLast={version:PRED_V2_BACKFILL_VERSION,calculatedAt:new Date().toISOString(),lastRawDate:clock.lastRawDate,totalRows:rows.length,rows};
+  if(saveRemote&&typeof SBData!=='undefined'&&SBData.upsertPredV2BackfillAudit){
+    const payload=rows.map(r=>({data_date:r.date,session:r.session,slot:r.slot,raw:r.raw,result:r.result,candidates4:r.mode===4?r.candidates:[],candidates3:r.mode===3?r.candidates:[],candidates2:r.mode===2?r.candidates:[],rank4:r.mode===4?r.rank:null,rank3:r.mode===3?r.rank:null,rank2:r.mode===2?r.rank:null,status4:r.mode===4?(r.jp?'JP':'ZONK'):null,status3:r.mode===3?(r.jp?'JP':'ZONK'):null,status2:r.mode===2?(r.jp?'JP':'ZONK'):null,engine_version:PRED_V2_BACKFILL_VERSION}));
+    const sr=await SBData.upsertPredV2BackfillAudit(payload); if(!sr.ok)throw new Error(sr.reason||'Gagal menyimpan PRED V2 backfill');
+  }
+  try{renderPredV2(activePredSubV2);renderHistoricalSyncPanel();}catch(e){}
+  return predV2BackfillLast;
+}
+// WRAPPER UI (additive-only) — tombol BACKFILL SEMUA DATA LAMPAU di PRED V2,
+// memanggil runPredV2HistoricalBackfill yang sudah ada, tanpa mengubah logikanya.
+async function handleRunFullBackfillV2(btnId){
+  const btn=$id(btnId);
+  const orig=btn?btn.textContent:'';
+  if(btn){btn.disabled=true;btn.textContent='⏳ MEMPROSES…';}
+  try{
+    const before=predV2BackfillLast?predV2BackfillLast.totalRows:0;
+    const result=await runPredV2HistoricalBackfill(true);
+    const added=(result&&result.totalRows||0)-before;
+    if(btn)btn.textContent=added>0?`✓ ${added} riwayat baru ditambahkan`:'✓ Sudah lengkap, tidak ada yang baru';
+  }catch(e){
+    if(btn)btn.textContent='✕ Gagal — coba lagi';
+  }
+  setTimeout(()=>{if(btn){btn.disabled=false;btn.textContent=orig;}},3000);
+}
+
+function _rankScore(rank,maxRank){return rank==null?0:1-((rank-1)/Math.max(1,maxRank-1));}
+function _v3Candidates(n,dateISO,raw){
+  const har=computeSlotPredLocal(raw,dateISO)[`cand${n}`]||[];
+  const v1full=scoreCandidatesCombinedAsOf(n,ALL[n].length,dateISO);
+  const v1=injectPositionalCandidates(v1full,diversifyCandidates(v1full,15),n,dateISO).map(x=>x.cand);
+  const pool=[...new Set([...har.map(x=>x.letters).filter(Boolean),...v1])];
+  const hMap=new Map(har.map((x,i)=>[x.letters,i+1]));
+  const vMap=new Map(v1.map((x,i)=>[x,i+1]));
+  const maxRank=15;
+  const scored=pool.map(cand=>{
+    const hr=hMap.get(cand)||null, vr=vMap.get(cand)||null;
+    const hs=_rankScore(hr,maxRank),vs=_rankScore(vr,maxRank);
+    const consensus=hr!=null&&vr!=null;
+    let rawEvidence=0;
+    if(raw&&raw.length===8){try{const d=candidateDigitsFromRaw(cand,raw);if(d)rawEvidence=0.05;}catch(e){}}
+    const score=0.45*hs+0.45*vs+(consensus?0.08:0)+rawEvidence;
+    return{letters:cand,digits:candidateDigitsFromRaw(cand,raw),finalScore:+score.toFixed(6),harianRank:hr,predV1Rank:vr,harianScore:+hs.toFixed(4),predV1Score:+vs.toFixed(4),consensus,rawEvidence:+rawEvidence.toFixed(4)};
+  }).filter(x=>x.digits).sort((a,b)=>b.finalScore-a.finalScore||a.letters.localeCompare(b.letters));
+  return scored.slice(0,15).map((x,i)=>({...x,rank:i+1}));
+}
+function runPredV3ForSlot(n,dateISO,raw){return _v3Candidates(n,dateISO,raw);}
+function runPredV3Backtest(){
+  const rows=[]; const source=[...(rawLog||[])].filter(r=>r&&r.date&&r.date<todayStr()&&r.raw&&r.raw.length===8&&r.result&&r.result!=='ZONK').sort((a,b)=>String(a.date).localeCompare(String(b.date)));
+  for(const r of source){
+    for(const n of [2,3,4]){
+      if(r.appliedTo&&!r.appliedTo.includes(n))continue;
+      const target=_v2ResultForMode(r.result,n);if(!target)continue;
+      const cand=runPredV3ForSlot(n,r.date,r.raw);const idx=cand.findIndex(x=>x.letters===target);
+      rows.push({date:r.date,session:r.session,slot:r.slot,raw:r.raw,result:r.result,mode:n,candidates:cand,target,rank:idx>=0?idx+1:null,jp:idx>=0});
+    }
+  }
+  const summary={};
+  [2,3,4].forEach(n=>{const a=rows.filter(r=>r.mode===n);const h=a.filter(r=>r.jp);summary[n]={total:a.length,hits:h.length,jpRate:a.length?+(h.length/a.length*100).toFixed(2):0,top3:h.filter(r=>r.rank<=3).length,top5:h.filter(r=>r.rank<=5).length,top10:h.filter(r=>r.rank<=10).length,avgRank:h.length?+(h.reduce((s,r)=>s+r.rank,0)/h.length).toFixed(2):null};});
+  predV3Last={version:PRED_V3_VERSION,calculatedAt:new Date().toISOString(),lastRawDate:getGlobalDataClock().lastRawDate,rows,summary};
+  try{if(typeof SBData!=='undefined'&&SBData.upsertPredV3BacktestAudit){
+    const payload=rows.map(r=>({data_date:r.date,session:r.session||'',slot:r.slot||0,raw:r.raw,result:r.result,candidates4:r.mode===4?r.candidates:[],candidates3:r.mode===3?r.candidates:[],candidates2:r.mode===2?r.candidates:[],metrics:{mode:r.mode,target:r.target,rank:r.rank,jp:r.jp,summary:summary[r.mode]},engine_version:PRED_V3_VERSION}));
+    SBData.upsertPredV3BacktestAudit(payload).catch(()=>{});
+  }}catch(eSaveV3){}
+  renderPredV3(); renderHistoricalSyncPanel(); return predV3Last;
+}
+function renderHistoricalSyncPanel(){
+  const el=$id('historicalSyncPanel');if(!el)return;
+  const r=validateHistoricalAlignment(),c=r.master;
+  const names=['HARIAN','PRED_V1','PRED_V2','KEMBAR','PRED_V3'];
+  el.innerHTML=`<div class="input-section" style="margin:12px 0;border-color:var(--gold)"><div class="input-title" style="color:var(--gold)">🧭 GLOBAL HISTORICAL SYNC</div><div style="font-size:8px;color:var(--dim);line-height:1.45">RAW adalah MASTER TIMELINE. Frontier terakhir RAW: <b style="color:#fff">${c.lastRawDate?isoToDisplay(c.lastRawDate):'-'}</b>. Tab yang tertinggal harus mengejar frontier melalui backfill/reconcile; RAW dan result asli tidak diubah.</div><div style="margin-top:7px">${names.map(n=>{const x=r.targets[n]||{};return `<div style="display:flex;justify-content:space-between;padding:3px 6px;font-size:8px;background:var(--panel2);margin:2px 0;border-radius:4px"><span>${n}</span><span style="color:${x.aligned?'var(--green)':'var(--accent2)'}">${x.lastDate?isoToDisplay(x.lastDate):'belum ada'} ${x.aligned?'✓':'⚠ GAP'}</span></div>`}).join('')}</div><div style="display:flex;gap:6px;margin-top:7px"><button class="btn btn-undo" style="flex:1;color:var(--green);border-color:var(--green)" onclick="runPredV2HistoricalBackfill(true).then(()=>{renderHistoricalSyncPanel();})">🔄 BACKFILL PRED V2</button><button class="btn btn-undo" style="flex:1;color:var(--gold);border-color:var(--gold)" onclick="runPredV3Backtest()">🧪 BACKTEST V3</button></div><div style="font-size:7px;color:var(--dim);margin-top:5px">${r.ok?'🟢 Semua frontier terdeteksi selaras.':'🟡 Ada domain yang tertinggal dari RAW master — gunakan backfill/reconcile.'}</div></div>`;
+}
+function renderPredV3(){
+  const el=$id('predv3-content');if(!el)return;
+  const c=getGlobalDataClock(),s=predV3Last&&predV3Last.summary;
+  const rows=predV3Last&&predV3Last.rows||[];
+  let html=`<div class="gen-box"><div class="uni-title" style="color:#ffb74d">🧬 PRED V3 — FUSION HARIAN + PRED V1</div><div class="uni-sub">Engine baru memakai kandidat fresh dari HARIAN raw-aware + PRED V1 historis. Kandidat lama tidak menjadi input. Ranking dinormalisasi sebelum fusion; consensus dan raw evidence memberi bonus kecil.</div><button class="btn-generate" style="border-color:#ffb74d;color:#ffb74d" onclick="runPredV3Backtest()">🧪 GENERATE / BACKTEST PRED V3</button><div style="font-size:8px;color:var(--gold);margin-top:6px">🗂️ Tombol ini otomatis mencakup seluruh data lampau (backfill+backtest jadi satu) — tidak perlu tombol backfill terpisah.</div><div style="font-size:8px;color:var(--dim);margin-top:6px">RAW MASTER: ${c.lastRawDate?isoToDisplay(c.lastRawDate):'-'} · ${c.totalRawEntries} entri raw.</div></div>`;
+  if(s){html+=`<div class="input-section" style="border-color:#ffb74d"><div class="input-title" style="color:#ffb74d">HASIL BACKTEST V3</div>${[4,3,2].map(n=>{const m=s[n]||{};return `<div style="display:flex;justify-content:space-between;padding:5px 7px;background:var(--panel2);margin:3px 0;border-radius:5px;font-size:9px"><span>${n}D</span><span>${m.hits||0}/${m.total||0} JP · ${m.jpRate||0}%</span><span style="color:var(--dim)">Top3 ${m.top3||0} · Top5 ${m.top5||0} · Top10 ${m.top10||0} · avg# ${m.avgRank??'-'}</span></div>`}).join('')}</div>`;}
+  if(rows.length){const recent=rows.slice(-20).reverse();html+=`<div class="input-section"><div class="input-title">20 HASIL TERBARU</div>${recent.map(r=>`<div style="display:flex;gap:7px;align-items:center;padding:4px 0;border-bottom:1px solid rgba(255,255,255,.04);font-size:8px"><span style="color:var(--dim)">${isoToDisplay(r.date)}</span><span>${r.mode}D</span><b style="color:${r.jp?'var(--green)':'var(--accent2)'}">${r.jp?'JP #'+r.rank:'ZONK'}</b><span style="color:var(--dim)">${r.result}</span></div>`).join('')}</div>`;}
+  el.innerHTML=html;
+}
 
 // ============================================================
 // HARIAN V2 RECALCULATION / BACKTEST (2026-08-28)
@@ -6961,12 +7127,47 @@ function _renderPredPerSlotToday(n,cc){
 // di tanggal yg sama. Tanggal yg SUDAH tercatat di predSlotLog[n] (mesin
 // baru, mulai 25/08/2026) SENGAJA dilewati di sini supaya tidak dobel
 // tampil dgn blok "2 hari" di atas.
+// LAZY-RENDER (2026-08-28, perbaikan performa): shell murah dipanggil tiap
+// render biasa (hanya hitung jumlah tanggal/slot, TANPA hitung kandidat).
+// Perhitungan berat (JP/Zonk rate + kandidat per tanggal) dipindah ke
+// _computeFullHistoryPanelV1, baru dijalankan saat panel <details> DIBUKA
+// (lewat ontoggle -> _lazyFillFullHistoryV1). Tidak ada cache lintas-buka
+// (selalu dihitung fresh tiap dibuka) supaya rate JP tidak pernah basi.
 function _renderPredPerSlotFullHistory(n,cc){
   try{
     if(!harianPredGenLog||!harianPredGenLog.length)harianPredGenLog=loadHarianPredGenLog();
     const newerDates=new Set((predSlotLog[n]||[]).map(e=>e.dateISO));
     const filled=harianPredGenLog.filter(e=>e.raw&&!newerDates.has(e.dateISO));
     if(!filled.length)return '';
+    const dateCount=new Set(filled.map(e=>e.dateISO)).size;
+    const elId='fhV1_'+n;
+    return `<details style="margin-bottom:10px;border:1px solid var(--border);border-radius:8px;background:var(--panel);padding:2px 0" ontoggle="if(this.open)_lazyFillFullHistoryV1(${n},'${cc}','${elId}')">
+      <summary style="cursor:pointer;padding:8px 10px;list-style:none">
+        <span style="color:var(--purple);font-size:8px;letter-spacing:1px">📜 RIWAYAT LENGKAP SEBELUMNYA (${dateCount} tanggal, ${filled.length} slot) — tanggal/raw/result dari data lama, kandidat dihitung ulang pakai engine sekarang</span>
+        <span id="${elId}_badge" style="float:right;font-size:8px;color:var(--dim);text-align:right">buka utk lihat rate JP</span>
+      </summary>
+      <div id="${elId}_body" style="padding:0 10px 8px"><div style="font-size:8px;color:var(--dim);padding:8px 0">Tap utk memuat…</div></div>
+    </details>`;
+  }catch(e){return '';}
+}
+function _lazyFillFullHistoryV1(n,cc,elId){
+  const bodyEl=$id(elId+'_body'),badgeEl=$id(elId+'_badge');
+  if(!bodyEl)return;
+  bodyEl.innerHTML='<div style="font-size:8px;color:var(--dim);padding:8px 0">⏳ Menghitung riwayat…</div>';
+  setTimeout(()=>{
+    try{
+      const r=_computeFullHistoryPanelV1(n,cc);
+      if(badgeEl)badgeEl.innerHTML=r.badgeHtml;
+      bodyEl.innerHTML=r.bodyHtml;
+    }catch(e){bodyEl.innerHTML='<div style="font-size:8px;color:var(--accent2)">Gagal menghitung riwayat.</div>';}
+  },30);
+}
+function _computeFullHistoryPanelV1(n,cc){
+  try{
+    if(!harianPredGenLog||!harianPredGenLog.length)harianPredGenLog=loadHarianPredGenLog();
+    const newerDates=new Set((predSlotLog[n]||[]).map(e=>e.dateISO));
+    const filled=harianPredGenLog.filter(e=>e.raw&&!newerDates.has(e.dateISO));
+    if(!filled.length)return {badgeHtml:'',bodyHtml:''};
     const sessLabel=k=>{const s=HARIAN_SESSIONS.find(x=>x.key===k);return s?s.label:k;};
     const sorted=[...filled].sort((a,b)=>(b.dateISO+b.sessKey+b.slot).localeCompare(a.dateISO+a.sessKey+a.slot));
     const byDate={};
@@ -7079,21 +7280,16 @@ function _renderPredPerSlotFullHistory(n,cc){
       </div>`;
     };
 
-    let html=`<details style="margin-bottom:10px;border:1px solid var(--border);border-radius:8px;background:var(--panel);padding:2px 0">
-      <summary style="cursor:pointer;padding:8px 10px;list-style:none">
-        <span style="color:var(--purple);font-size:8px;letter-spacing:1px">📜 RIWAYAT LENGKAP SEBELUMNYA (${dates.length} tanggal, ${filled.length} slot) — tanggal/raw/result dari data lama, kandidat dihitung ulang pakai engine sekarang</span>
-        <span style="float:right;font-size:8px;color:var(--gold);text-align:right">TIER 1 — JP: ${jpCount}/${totalScored} · ${jpRate}%${totalScoredT2?`<br>TIER 2 — JP: ${jpCountT2}/${totalScoredT2} · ${jpRateT2}%`:''}</span>
-      </summary>
-      <div style="padding:0 10px 8px">`;
+    const badgeHtml=`TIER 1 — JP: ${jpCount}/${totalScored} · ${jpRate}%${totalScoredT2?`<br>TIER 2 — JP: ${jpCountT2}/${totalScoredT2} · ${jpRateT2}%`:''}`;
+    let bodyHtml='';
     dates.forEach(d=>{
       const entries=byDate[d];
-      html+=`<details style="margin-bottom:4px"><summary style="font-size:8px;color:var(--dim);cursor:pointer;padding:4px 0">📅 ${isoToDisplay(d)} · ${entries.length} slot ${dateHasJp[d]?'🏆':''}</summary>`;
-      entries.forEach(e=>{html+=renderEntry(e);});
-      html+='</details>';
+      bodyHtml+=`<details style="margin-bottom:4px"><summary style="font-size:8px;color:var(--dim);cursor:pointer;padding:4px 0">📅 ${isoToDisplay(d)} · ${entries.length} slot ${dateHasJp[d]?'🏆':''}</summary>`;
+      entries.forEach(e=>{bodyHtml+=renderEntry(e);});
+      bodyHtml+='</details>';
     });
-    html+='</div></details>';
-    return html;
-  }catch(e){return '';}
+    return {badgeHtml,bodyHtml};
+  }catch(e){return {badgeHtml:'',bodyHtml:''};}
 }
 
 // ============================================================
@@ -7174,12 +7370,42 @@ function _renderPredPerSlotTodayV2(n,cc){
     return html;
   }catch(e){return '';}
 }
+// LAZY-RENDER (2026-08-28) — sama pola dengan _renderPredPerSlotFullHistory V1.
 function _renderPredPerSlotFullHistoryV2(n,cc){
   try{
     if(!harianPredGenLog||!harianPredGenLog.length)harianPredGenLog=loadHarianPredGenLog();
     const newerDates=new Set((predSlotLogV2[n]||[]).map(e=>e.dateISO));
     const filled=harianPredGenLog.filter(e=>e.raw&&!newerDates.has(e.dateISO));
     if(!filled.length)return '';
+    const dateCount=new Set(filled.map(e=>e.dateISO)).size;
+    const elId='fhV2_'+n;
+    return `<details style="margin-bottom:10px;border:1px solid var(--border);border-radius:8px;background:var(--panel);padding:2px 0" ontoggle="if(this.open)_lazyFillFullHistoryV2(${n},'${cc}','${elId}')">
+      <summary style="cursor:pointer;padding:8px 10px;list-style:none">
+        <span style="color:#7ee787;font-size:8px;letter-spacing:1px">📜 RIWAYAT LENGKAP SEBELUMNYA (${dateCount} tanggal, ${filled.length} slot) — tanggal/raw/result dari data lama, kandidat dihitung ulang pakai BATCH 2</span>
+        <span id="${elId}_badge" style="float:right;font-size:8px;color:var(--dim)">buka utk lihat rate JP</span>
+      </summary>
+      <div id="${elId}_body" style="padding:0 10px 8px"><div style="font-size:8px;color:var(--dim);padding:8px 0">Tap utk memuat…</div></div>
+    </details>`;
+  }catch(e){return '';}
+}
+function _lazyFillFullHistoryV2(n,cc,elId){
+  const bodyEl=$id(elId+'_body'),badgeEl=$id(elId+'_badge');
+  if(!bodyEl)return;
+  bodyEl.innerHTML='<div style="font-size:8px;color:var(--dim);padding:8px 0">⏳ Menghitung riwayat…</div>';
+  setTimeout(()=>{
+    try{
+      const r=_computeFullHistoryPanelV2(n,cc);
+      if(badgeEl)badgeEl.innerHTML=r.badgeHtml;
+      bodyEl.innerHTML=r.bodyHtml;
+    }catch(e){bodyEl.innerHTML='<div style="font-size:8px;color:var(--accent2)">Gagal menghitung riwayat.</div>';}
+  },30);
+}
+function _computeFullHistoryPanelV2(n,cc){
+  try{
+    if(!harianPredGenLog||!harianPredGenLog.length)harianPredGenLog=loadHarianPredGenLog();
+    const newerDates=new Set((predSlotLogV2[n]||[]).map(e=>e.dateISO));
+    const filled=harianPredGenLog.filter(e=>e.raw&&!newerDates.has(e.dateISO));
+    if(!filled.length)return {badgeHtml:'',bodyHtml:''};
     const sessLabel=k=>{const s=HARIAN_SESSIONS.find(x=>x.key===k);return s?s.label:k;};
     const sorted=[...filled].sort((a,b)=>(b.dateISO+b.sessKey+b.slot).localeCompare(a.dateISO+a.sessKey+a.slot));
     const byDate={};
@@ -7251,21 +7477,16 @@ function _renderPredPerSlotFullHistoryV2(n,cc){
       </div>`;
     };
 
-    let html=`<details style="margin-bottom:10px;border:1px solid var(--border);border-radius:8px;background:var(--panel);padding:2px 0">
-      <summary style="cursor:pointer;padding:8px 10px;list-style:none">
-        <span style="color:#7ee787;font-size:8px;letter-spacing:1px">📜 RIWAYAT LENGKAP SEBELUMNYA (${dates.length} tanggal, ${filled.length} slot) — tanggal/raw/result dari data lama, kandidat dihitung ulang pakai BATCH 2</span>
-        <span style="float:right;font-size:8px;color:var(--gold)">JP: ${jpCount}/${totalScored} · ${jpRate}%</span>
-      </summary>
-      <div style="padding:0 10px 8px">`;
+    const badgeHtml=`JP: ${jpCount}/${totalScored} · ${jpRate}%`;
+    let bodyHtml='';
     dates.forEach(d=>{
       const entries=byDate[d];
-      html+=`<details style="margin-bottom:4px"><summary style="font-size:8px;color:var(--dim);cursor:pointer;padding:4px 0">📅 ${isoToDisplay(d)} · ${entries.length} slot ${dateHasJp[d]?'🏆':''}</summary>`;
-      entries.forEach(e=>{html+=renderEntry(e);});
-      html+='</details>';
+      bodyHtml+=`<details style="margin-bottom:4px"><summary style="font-size:8px;color:var(--dim);cursor:pointer;padding:4px 0">📅 ${isoToDisplay(d)} · ${entries.length} slot ${dateHasJp[d]?'🏆':''}</summary>`;
+      entries.forEach(e=>{bodyHtml+=renderEntry(e);});
+      bodyHtml+='</details>';
     });
-    html+='</div></details>';
-    return html;
-  }catch(e){return '';}
+    return {badgeHtml,bodyHtml};
+  }catch(e){return {badgeHtml:'',bodyHtml:''};}
 }
 
 function renderPred(n){
@@ -7438,6 +7659,7 @@ function renderPredV2(n){
     <button class="btn-generate" id="btnGenV2${n}" onclick="handleGeneratePredV2(${n})" ${locked?'disabled':''}>
       ${locked?`✓ PREDIKSI TERKUNCI`:'⚡ GENERATE PREDIKSI (15 KANDIDAT)'}
     </button>
+    <button class="btn btn-undo" id="btnBackfillV2${n}" style="width:100%;margin-top:8px;font-size:9px;border-color:var(--gold);color:var(--gold)" onclick="handleRunFullBackfillV2('btnBackfillV2${n}')">🗂️ BACKFILL SEMUA DATA LAMPAU (2H/3H/4H)</button>
     ${locked&&!allDone?`<div class="locked-notice">Terkunci. Submit result aktual (<span style="color:var(--gold);font-weight:700">${resultCount}/${PRED_RESULT_LIMIT}</span> dilakukan) — generate baru terbuka setelah ${PRED_RESULT_LIMIT}x.</div>`:''}
     ${allDone?`<div class="locked-notice" style="color:var(--green);border-color:rgba(0,230,118,0.3);background:rgba(0,230,118,0.05)">✓ Limit ${PRED_RESULT_LIMIT}x tercapai. Generate baru tersedia.</div>`:''}
   </div>`;
@@ -11029,7 +11251,7 @@ function handleImport(n,input){
 // ============================================================
 // TAB & SECTION SWITCHING (induk semua tab)
 // ============================================================
-const ALL_TABS=[2,3,4,'K','dash','harian','harilengkap','predgen','audit','eval','pred','predv2','aipred','analisa','rawanalisa','dna','export','harihist','ai','intel'];
+const ALL_TABS=[2,3,4,'K','dash','harian','harilengkap','predgen','audit','eval','pred','predv2','predv3','aipred','analisa','rawanalisa','dna','export','harihist','ai','intel'];
 function switchTab(n){
   ALL_TABS.forEach(t=>{
     const tab=$id('tab'+(typeof t==='number'?t:'-'+t))||$id('tab'+t);
@@ -11040,7 +11262,7 @@ function switchTab(n){
   const tabId=typeof n==='number'?'tab'+n:'tab-'+n;
   const tab=$id(tabId)||$id('tab'+n);
   const page=$id('page-'+n);
-  const classMap={K:'active-kembar',dash:'active-dash',harian:'active-harian',harilengkap:'active-harilengkap',predgen:'active-predgen',audit:'active-audit',pred:'active-pred',predv2:'active-pred',aipred:'active-aipred',analisa:'active-analisa',rawanalisa:'active-rawanalisa',dna:'active-dna',export:'active-export',harihist:'active-harihist',eval:'active-eval',ai:'active-ai',intel:'active-intel'};
+  const classMap={K:'active-kembar',dash:'active-dash',harian:'active-harian',harilengkap:'active-harilengkap',predgen:'active-predgen',audit:'active-audit',pred:'active-pred',predv2:'active-pred',predv3:'active-pred',aipred:'active-aipred',analisa:'active-analisa',rawanalisa:'active-rawanalisa',dna:'active-dna',export:'active-export',harihist:'active-harihist',eval:'active-eval',ai:'active-ai',intel:'active-intel'};
   if(tab)tab.className=classMap[n]?'tab '+classMap[n]:'tab active-'+n;
   if(page)page.classList.add('active');
 
@@ -11053,6 +11275,7 @@ function switchTab(n){
   else if(n==='audit'){renderAuditLog();}
   else if(n==='pred'){if(activePredSub==='KMB')renderPredKmb();else renderPred(activePredSub);}
   else if(n==='predv2'){renderPredV2(activePredSubV2);}
+  else if(n==='predv3'){renderPredV3();}
   else if(n==='aipred'){renderAiPred();}
   else if(n==='analisa'){renderAnalisa(activeAnalisaSub);}
   else if(n==='rawanalisa'){renderRawAnalisaLog();}
@@ -12784,6 +13007,9 @@ async function boot(){
     try{renderHarianLog();}catch(e){}
     try{renderHariHist();}catch(e){}
     try{renderHariLengkap();}catch(e){}
+    // GLOBAL TIMELINE + PRED V2 historical backfill: RAW adalah frontier master.
+    // Backfill hanya mengejar tanggal lampau yang sudah punya result; tidak mengubah raw/result.
+    try{getGlobalDataClock();renderHistoricalSyncPanel();setTimeout(()=>{try{runFullBackfill();}catch(eV1Backfill){};runPredV2HistoricalBackfill(true).then(()=>{try{renderHistoricalSyncPanel();}catch(eSyncPanel){}}).catch(()=>{});},250);}catch(eBackfill){}
     // AH Sync Foundation (Sprint 1) — inisialisasi status saja, TIDAK auto-sync.
     // Dibungkus try/catch + tidak di-await: kalau gagal/timeout, boot tracker
     // tidak boleh terpengaruh sama sekali.
@@ -15483,6 +15709,26 @@ const AHSyncEngine=(function(){
     }
   }
 
+  // PRED V2 HISTORICAL BACKFILL — fresh candidates, upsert per date/session/slot.
+  // PRED V3 BACKTEST AUDIT — fresh fusion HARIAN + PRED V1, per slot.
+  async function upsertPredV3BacktestAudit(arr){
+    if(!arr||!arr.length)return{ok:false,reason:'empty_v3_backtest'};
+    const c=_client();if(!c)return{ok:false,reason:'no_client'};
+    const uid=await _uid();if(!uid)return{ok:false,reason:'no_user'};
+    const rows=arr.map(e=>({user_id:uid,data_date:e.data_date,session:e.session||'',slot:e.slot||0,raw:e.raw||null,result:e.result||null,candidates4:e.candidates4||[],candidates3:e.candidates3||[],candidates2:e.candidates2||[],metrics:e.metrics||{},engine_version:e.engine_version||'PRED-V3-BACKTEST-v1'}));
+    const{error}=await c.from('pred_v3_backtest_audit').upsert(rows,{onConflict:'user_id,data_date,session,slot'});
+    if(error)return{ok:false,reason:error.message}; return{ok:true};
+  }
+
+  async function upsertPredV2BackfillAudit(arr){
+    if(!arr||!arr.length)return{ok:false,reason:'empty_v2_backfill'};
+    const c=_client();if(!c)return{ok:false,reason:'no_client'};
+    const uid=await _uid();if(!uid)return{ok:false,reason:'no_user'};
+    const rows=arr.map(e=>({user_id:uid,data_date:e.data_date,session:e.session,slot:e.slot,raw:e.raw||null,result:e.result||null,candidates4:e.candidates4||[],candidates3:e.candidates3||[],candidates2:e.candidates2||[],rank4:e.rank4??null,rank3:e.rank3??null,rank2:e.rank2??null,status4:e.status4||null,status3:e.status3||null,status2:e.status2||null,engine_version:e.engine_version||'PRED-V2-BACKFILL-v1'}));
+    const{error}=await c.from('pred_v2_backfill_audit').upsert(rows,{onConflict:'user_id,data_date,session,slot'});
+    if(error)return{ok:false,reason:error.message}; return{ok:true};
+  }
+
   // HARIAN RECALC AUDIT — append/upsert per (date,session,slot,version).
   // Tidak menyentuh raw_log/entries/prediction state.
   async function upsertHarianRecalcAudit(arr){
@@ -15524,6 +15770,7 @@ const AHSyncEngine=(function(){
     // Sprint 7 (fondasi checksum versioning -- lihat catatan di _fetchServerStableChecksum)
     _buildCombinedChecksum,_fetchServerStableChecksum,CHECKSUM_VERSION,parseCombinedChecksum,
     upsertHarianRecalcAudit,
+    upsertPredV2BackfillAudit,upsertPredV3BacktestAudit,
     // Blueprint 2026-08 (reset total server, lihat resetSemuaDataHistoris)
     hardResetRemote,
     _TESTING_setClient,_TESTING_reset

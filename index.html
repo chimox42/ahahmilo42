@@ -2013,6 +2013,53 @@ function renderHarianLog(){
 // Hapus satu entri Riwayat Harian (by index asli di rawLog) — membatalkan
 // dulu semua efeknya di pool 2H/3H/4H/Kembar via reverseHarianEntry, baru
 // menghapus baris log-nya sendiri. Dipakai untuk koreksi input yang salah.
+// SINKRONISASI harianPredGenLog <-> rawLog (2026-08-28, perbaikan additive):
+// harianPredGenLog dicatat TERPISAH dari rawLog (lihat _logHarianPredGen),
+// jadi kalau entri Harian dihapus/diganti tapi harianPredGenLog tidak ikut
+// dibersihkan, RIWAYAT LENGKAP di PRED V1/V2 (sumbernya harianPredGenLog)
+// bisa menampilkan entri yang sudah tidak ada lagi di RIWAYAT HARIAN
+// (sumbernya rawLog). Helper ini membuang entri harianPredGenLog untuk
+// kombinasi tanggal+sesi+slot tertentu (raw APAPUN -- cuma boleh ada 1
+// entri hidup per slot per tanggal), dipanggil dari titik hapus & ganti.
+function _removeHarianPredGenEntriesFor(dateISO,sessKey,slot){
+  try{
+    if(!harianPredGenLog||!harianPredGenLog.length)return 0;
+    const before=harianPredGenLog.length;
+    harianPredGenLog=harianPredGenLog.filter(e=>!(e.dateISO===dateISO&&e.sessKey===sessKey&&e.slot===slot));
+    const removed=before-harianPredGenLog.length;
+    if(removed)saveHarianPredGenLog();
+    return removed;
+  }catch(e){return 0;}
+}
+function _sessKeyFromLabel(label){
+  const s=HARIAN_SESSIONS.find(x=>x.label===label);
+  return s?s.key:label;
+}
+// Rekonsiliasi sekali-jalan: buang SEMUA entri harianPredGenLog yang sudah
+// yatim (tanggal+sesi+slot-nya sudah tidak ada lagi di rawLog saat ini) --
+// utk membersihkan data lama yang terlanjur desync SEBELUM perbaikan ini
+// ada. rawLog tidak disentuh sama sekali (searah, harianPredGenLog yang
+// menyesuaikan ke rawLog, bukan sebaliknya).
+function syncHarianPredGenLogWithRawLog(){
+  if(!harianPredGenLog||!harianPredGenLog.length)return 0;
+  const liveKeys=new Set(rawLog.filter(r=>r.raw).map(r=>r.date+'|'+_sessKeyFromLabel(r.session)+'|'+(r.slot||1)));
+  const before=harianPredGenLog.length;
+  harianPredGenLog=harianPredGenLog.filter(e=>liveKeys.has(e.dateISO+'|'+e.sessKey+'|'+e.slot));
+  const removed=before-harianPredGenLog.length;
+  if(removed)saveHarianPredGenLog();
+  return removed;
+}
+function handleSyncHarianPredGenLog(btnId){
+  const removed=syncHarianPredGenLogWithRawLog();
+  const btn=$id(btnId);
+  if(btn){
+    const orig=btn.textContent;
+    btn.textContent=removed>0?`✓ ${removed} entri yatim dibuang`:'✓ Sudah sinkron, tidak ada yang yatim';
+    setTimeout(()=>{btn.textContent=orig;},3000);
+  }
+  try{renderPred(2);renderPred(3);renderPred(4);renderPredV2(activePredSubV2);}catch(e){}
+}
+
 function deleteHarianLogEntry(idx){
   const entry=rawLog[idx];
   if(!entry)return;
@@ -2021,6 +2068,7 @@ function deleteHarianLogEntry(idx){
   try{reverseHarianEntry(entry);}catch(e){}
   markRawLogDeleted(entry);
   rawLog.splice(idx,1);
+  try{_removeHarianPredGenEntriesFor(entry.date,_sessKeyFromLabel(entry.session),entry.slot||1);}catch(eSync){}
   saveRawLog();
   renderHarianLog();
   try{renderAll(2);renderAll(3);renderAll(4);renderNotifBanner();renderDash();}catch(e){}
@@ -2090,6 +2138,7 @@ function submitHarian(){
       if(existingIdx>=0){
         reverseHarianEntry(rawLog[existingIdx]);
         rawLog.splice(existingIdx,1);
+        try{_removeHarianPredGenEntriesFor(dateISO,sess.key,slot);}catch(eSync){}
         replacedCount++;
       }
 
@@ -9214,6 +9263,8 @@ function renderHariHist(){
       <span style="color:var(--dim)">dari ${r.total} entri terisi</span>
       ${r.dateRange?`<span style="color:var(--dim)">· ${isoToDisplay(r.dateRange.from)} s/d ${isoToDisplay(r.dateRange.to)}</span>`:''}
     </div></div>`;
+
+  html+=`<button class="btn btn-undo" id="btnSyncHarianPred" style="width:100%;margin:8px 0;font-size:9px;border-color:var(--purple);color:var(--purple)" onclick="handleSyncHarianPredGenLog('btnSyncHarianPred')">🔄 SINKRONKAN RIWAYAT HARIAN ↔ PRED (buang entri PRED yang yatim)</button>`;
 
   // 1. PER SESI
   html+=`<div class="section"><div class="section-head" onclick="toggleSec('hh-sess')"><div class="section-head-title"><div class="dot" style="background:var(--gold)"></div><span style="color:var(--gold)">📊 PERFORMA PER SESI</span></div><div class="tog open" id="tog-hh-sess">▼</div></div>

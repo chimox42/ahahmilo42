@@ -1675,6 +1675,33 @@ function renderHarianPredBox(sessKey){
 let harianLogPage=0;
 const HARIAN_LOG_PAGE_SIZE=20;
 function harianLogGoPage(p){harianLogPage=p;renderHarianLog();}
+// Cek apakah result aktual sebuah entri rawLog cocok dgn kandidat PRED tab
+// HARIAN (cand4/cand3/cand2/kembar dari computeSlotPredLocal). Prioritas
+// pakai predSnapshot yg sudah tersimpan persis di entri itu (arsip asli
+// saat SIMPAN ditekan); kalau entri lama belum punya snapshot (raw ada tapi
+// snapshot belum tercatat), recompute walk-forward pakai raw+tanggal entri
+// itu sendiri -- sama prinsipnya dgn panel RIWAYAT LENGKAP SEBELUMNYA di
+// tab PRED (dihitung ulang pakai engine sekarang, bukan reject begitu saja).
+function _harianLogHitInfo(r){
+  if(!r.result||r.result==='ZONK'||!r.raw||r.raw.length!==8)return null;
+  let snap=r.predSnapshot;
+  if(!snap||(!snap.cand4&&!snap.cand3&&!snap.cand2)){
+    try{const p=computeSlotPredLocal(r.raw,r.date);snap={cand4:p.cand4,cand3:p.cand3,cand2:p.cand2,kembar:p.kembar};}
+    catch(e){return null;}
+  }
+  const val=r.result;
+  const L=val.length;
+  const listKey=L===4?'cand4':L===3?'cand3':L===2?'cand2':null;
+  if(listKey&&snap[listKey]){
+    const idx=snap[listKey].findIndex(c=>c.letters===val);
+    if(idx>=0)return{hit:true,rank:idx+1};
+  }
+  if(snap.kembar&&snap.kembar.length){
+    const idx=snap.kembar.findIndex(k=>k.letters===val);
+    if(idx>=0)return{hit:true,rank:idx+1,kembar:true};
+  }
+  return{hit:false};
+}
 function renderHarianLog(){
   const el=$id('harianLogList');if(!el)return;
   const pagerEl=$id('harianLogPager');
@@ -1715,11 +1742,14 @@ function renderHarianLog(){
     const origIdx=rawLog.indexOf(r);
     const canJejak=r.raw&&r.raw.length===8&&r.result&&r.result!=='ZONK';
     const jejakBtn=canJejak?`<button onclick="toggleJejakPola(${origIdx})" style="background:none;border:1px solid var(--dim2);color:var(--purple);font-size:7px;letter-spacing:0.5px;border-radius:4px;padding:1px 5px;cursor:pointer;flex-shrink:0" title="Analisa raw & result vs kandidat engine">▸ Jejak Pola</button>`:'';
+    const hitInfo=_harianLogHitInfo(r);
+    const hitBadge=hitInfo?(hitInfo.hit?`<span style="color:var(--green);font-weight:700;white-space:nowrap">🏆 JP${hitInfo.kembar?' (kembar)':''} #${hitInfo.rank}</span>`:`<span style="color:var(--red);white-space:nowrap">💀 ZONK</span>`):'';
     return `<div style="display:flex;flex-direction:column;gap:2px;font-size:9px;padding:6px 8px;background:var(--panel2);border-radius:6px;margin-bottom:4px;border-left:3px solid ${color}">
       <div style="display:flex;justify-content:space-between;gap:6px;overflow-x:auto">
         <span style="color:var(--dim);white-space:nowrap">${r.ts} · ${r.session} · slot${r.slot||1}</span>
         <span style="color:#fff;letter-spacing:1px;white-space:nowrap">${r.raw||'-'}</span>
         <span style="color:${color};font-weight:700;white-space:nowrap">${r.result||'-'}</span>
+        ${hitBadge}
         ${crossTag}
         <span style="color:var(--dim);white-space:nowrap">${applied}</span>
         <button onclick="deleteHarianLogEntry(${origIdx})" style="background:none;border:none;color:var(--red);font-size:11px;cursor:pointer;padding:0 2px;flex-shrink:0" title="Hapus entri ini">🗑</button>
@@ -2505,6 +2535,10 @@ function _actualEntriesForDateKmb(dateISO){
 // aman dipanggil berkali-kali/dari subtab manapun tanpa dobel-catat.
 let backfillDone=(function(){try{const s=lsGet('tah2_backfill_done');return s?JSON.parse(s):[];}catch(e){return[];}})();
 function saveBackfillDone(){try{lsSet('tah2_backfill_done',JSON.stringify(backfillDone));try{AHSyncEngine.markPendingExtended();}catch(e2){}}catch(e){}}
+// Backfill PRED V2 (Candidate Extension) -- set idempoten TERPISAH dari V1,
+// biar reset/ubah salah satu backfill tidak saling pengaruh.
+let backfillDoneV2=(function(){try{const s=lsGet('tah2_backfillv2_done');return s?JSON.parse(s):[];}catch(e){return[];}})();
+function saveBackfillDoneV2(){try{lsSet('tah2_backfillv2_done',JSON.stringify(backfillDoneV2));try{AHSyncEngine.markPendingExtended();}catch(e2){}}catch(e){}}
 function runFullBackfill(){
   const today=todayStr();
   const doneSet=new Set(backfillDone);
@@ -2556,6 +2590,69 @@ function runFullBackfill(){
 }
 function handleRunFullBackfill(btnId){
   const added=runFullBackfill();
+  const btn=$id(btnId);
+  if(btn){
+    const orig=btn.textContent;
+    btn.textContent=added>0?`✓ ${added} riwayat baru ditambahkan`:'✓ Sudah lengkap, tidak ada yang baru';
+    setTimeout(()=>{btn.textContent=orig;},3000);
+  }
+}
+
+// ============================================================
+// BACKFILL PRED V2 (Candidate Extension) — clone konsep dari runFullBackfill
+// V1: ambil semua raw+result historis di rawLog (tanggal < hari ini),
+// hitung kandidat "as of" tanggal itu pakai engine V2 (_predV2CandidateBundle,
+// engine SEKARANG -- bukan snapshot lama), cocokkan ke result, catat
+// permanen ke histStateV2 satu entri per SESI/SLOT (sama granularitas
+// V1, bukan per tanggal). Idempoten lewat backfillDoneV2 (set terpisah
+// dari V1). KMB sengaja di-skip (scope V2 memang tidak meng-clone KMB).
+// Tidak memanggil _recordEngineAudit (di luar domain Audit Oracle, sama
+// prinsip dgn fungsi V2 lainnya).
+// ============================================================
+function runFullBackfillV2(){
+  const today=todayStr();
+  const doneSet=new Set(backfillDoneV2);
+  let added=0;
+  rawLog.forEach(r=>{
+    if(!r.date||r.date>=today||!r.result)return; // hanya data LAMPAU yg result-nya sudah pasti
+    [2,3,4].forEach(n=>{
+      if(!r.appliedTo||!r.appliedTo.includes(n))return;
+      const key='n'+n+'|'+r.date+'|'+r.session+'|'+r.slot;
+      if(doneSet.has(key))return;
+      const L=r.result.length;
+      let v=null;
+      if(L===4){if(n===4)v=r.result;else if(n===3)v=r.result.slice(1);else if(n===2)v=r.result.slice(2);}
+      else if(L===3){if(n===3)v=r.result;else if(n===2)v=r.result.slice(1);}
+      else if(L===2&&n===2)v=r.result;
+      if(!v)return;
+      const bundle=_predV2CandidateBundle(n,r.date,PRED_V2_TARGET);
+      const candidates=bundle.candidates;
+      const hitIdx=candidates.indexOf(v);
+      const isJp=hitIdx>=0;
+      const v1HitIdx=(bundle.v1Candidates||[]).indexOf(v);
+      const v1Hit=v1HitIdx>=0;
+      const additionalHit=isJp&&!v1Hit;
+      histStateV2[n].push({
+        date:r.date,
+        candidates,
+        v1Candidates:[...(bundle.v1Candidates||[])],
+        result:v,
+        jp:isJp,
+        v1Hit,v1HitIdx,additionalHit,
+        session:r.session,slot:r.slot,
+        engineVersion:PRED_V2_ENGINE_VERSION
+      });
+      doneSet.add(key);added++;
+    });
+  });
+  backfillDoneV2=[...doneSet];
+  saveBackfillDoneV2();
+  saveHistStateV2(2);saveHistStateV2(3);saveHistStateV2(4);
+  renderPredV2(2);renderPredV2(3);renderPredV2(4);
+  return added;
+}
+function handleRunFullBackfillV2(btnId){
+  const added=runFullBackfillV2();
   const btn=$id(btnId);
   if(btn){
     const orig=btn.textContent;
@@ -7317,6 +7414,7 @@ function renderPredV2(n){
     <button class="btn-generate" id="btnGenV2${n}" onclick="handleGeneratePredV2(${n})" ${locked?'disabled':''}>
       ${locked?`✓ PREDIKSI TERKUNCI`:'⚡ GENERATE PREDIKSI (15 KANDIDAT)'}
     </button>
+    <button class="btn btn-undo" id="btnBackfillV2${n}" style="width:100%;margin-top:8px;font-size:9px;border-color:var(--gold);color:var(--gold)" onclick="handleRunFullBackfillV2('btnBackfillV2${n}')">🗂️ BACKFILL SEMUA DATA LAMPAU (V2)</button>
     ${locked&&!allDone?`<div class="locked-notice">Terkunci. Submit result aktual (<span style="color:var(--gold);font-weight:700">${resultCount}/${PRED_RESULT_LIMIT}</span> dilakukan) — generate baru terbuka setelah ${PRED_RESULT_LIMIT}x.</div>`:''}
     ${allDone?`<div class="locked-notice" style="color:var(--green);border-color:rgba(0,230,118,0.3);background:rgba(0,230,118,0.05)">✓ Limit ${PRED_RESULT_LIMIT}x tercapai. Generate baru tersedia.</div>`:''}
   </div>`;

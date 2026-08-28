@@ -962,7 +962,8 @@ function renderHarian(){
     <input type="date" class="uni-date-input" id="harianDate" value="${today}" max="${today}" oninput="harianDateChanged()">
     <span class="uni-date-hint" id="harianDateHint"></span>
   </div>
-  <div id="harianOracleBox"></div>`;
+  <div id="harianOracleBox"></div>
+  <div id="harianRecalcBox"></div>`;
 
   HARIAN_SESSIONS.forEach(sess=>{
     html+=`<div class="input-section" style="margin-bottom:12px">
@@ -1001,6 +1002,7 @@ function renderHarian(){
   setHTML('harian-content',html);
   harianDateChanged();
   renderHarianOracleBox();
+  renderHarianRecalcBox();
   renderHarianLog();
   HARIAN_SESSIONS.forEach(sess=>{if(harianPredOpen[sess.key])renderHarianPredBox(sess.key);updateHarianDerivePreview(sess.key);});
 }
@@ -1670,6 +1672,107 @@ function renderHarianPredBox(sessKey){
   }
   h+=`<div style="font-size:8px;color:var(--dim);margin-top:8px;padding:0 4px">${isAsOf?`Kandidat dihitung walk-forward: hanya pakai data historis sampai ${isoToDisplay(asOfDate)} (entry setelah tanggal itu tidak ikut dihitung) — supaya mensimulasikan analisa seolah kamu berada di tanggal tersebut.`:'Kandidat berdasarkan seluruh data historis saat ini.'} Murni referensi — tidak mengunci apapun, tidak berkaitan dengan prediksi aktif di tab PRED/Kembar. Arsip lengkap (HURUF = ANGKA per slot, vs result aktual) otomatis tercatat di Riwayat Input Harian begitu SIMPAN ditekan, tertaut ke tanggal &amp; sesi ini untuk audit. Isi kolom Result begitu hasil aktual keluar.</div>`;
   box.innerHTML=h;
+}
+
+
+// ============================================================
+// HARIAN V2 RECALCULATION / BACKTEST (2026-08-28)
+// Tujuan: menguji ENGINE HARIAN V2 TERKINI terhadap RAW + RESULT historis
+// yang tersimpan, TANPA memakai kandidat lama sebagai input/constraint.
+// Kandidat lama hanya arsip. Recalculation ini murni walk-forward:
+// untuk entry tanggal D, scoreCandidatesCombinedAsOf/buildPositionalCandidates
+// hanya boleh melihat histori sampai D. Hasil baru tidak menulis rawLog/state.
+// ============================================================
+let harianRecalcLast=null;
+const HARIAN_RECALC_VERSION='harian-recalc-v1';
+
+function _harianRecalcResultForMode(actual,n){
+  if(!actual||actual==='ZONK')return null;
+  if(!/^[A-H]{2,4}$/.test(actual))return null;
+  if(actual.length===n)return actual;
+  if(actual.length>n)return actual.slice(actual.length-n);
+  return null;
+}
+function _harianRecalcEval(candidates,actual,n){
+  const target=_harianRecalcResultForMode(actual,n);
+  if(!target)return{eligible:false,hit:false,rank:null,target:null};
+  const letters=(candidates||[]).map(c=>c&&c.letters).filter(Boolean);
+  const idx=letters.indexOf(target);
+  return{eligible:true,hit:idx>=0,rank:idx>=0?idx+1:null,target};
+}
+function _harianRecalcEvalKembar(candidates,actual){
+  if(!actual||actual==='ZONK'||!/^[A-H]{4}$/.test(actual))return{eligible:false,hit:false,rank:null};
+  if(new Set(actual).size===4)return{eligible:false,hit:false,rank:null};
+  const list=(candidates||[]).filter(c=>c&&c.letters).map(c=>c.letters);
+  const idx=list.indexOf(actual);
+  return{eligible:true,hit:idx>=0,rank:idx>=0?idx+1:null};
+}
+function _harianRecalcOne(r){
+  const pred=computeSlotPredLocal(r.raw,r.date);
+  const actual=r.result||null;
+  const e4=_harianRecalcEval(pred.cand4,actual,4);
+  const e3=_harianRecalcEval(pred.cand3,actual,3);
+  const e2=_harianRecalcEval(pred.cand2,actual,2);
+  const ek=_harianRecalcEvalKembar(pred.kembar,actual);
+  return{
+    key:`${r.date}|${r.session}|${r.slot}|${r.raw}`,
+    date:r.date,session:r.session,slot:r.slot,raw:r.raw||'',actualResult:actual,
+    engineVersion:pred.engineVersion||'harian-raw-aware-v2',
+    candidates:{cand4:pred.cand4,cand3:pred.cand3,cand2:pred.cand2,kembar:pred.kembar},
+    evaluation:{4:e4,3:e3,2:e2,kembar:ek},
+    recalculatedAt:new Date().toISOString()
+  };
+}
+function _harianRecalcSummarize(rows){
+  const modes={4:{eligible:0,hits:0,ranks:[],top3:0,top5:0,top10:0},3:{eligible:0,hits:0,ranks:[],top3:0,top5:0,top10:0},2:{eligible:0,hits:0,ranks:[],top3:0,top5:0,top10:0},kembar:{eligible:0,hits:0,ranks:[],top3:0,top5:0,top10:0}};
+  rows.forEach(r=>Object.keys(modes).forEach(k=>{const e=r.evaluation[k];if(!e||!e.eligible)return;const m=modes[k];m.eligible++;if(e.hit){m.hits++;m.ranks.push(e.rank);if(e.rank<=3)m.top3++;if(e.rank<=5)m.top5++;if(e.rank<=10)m.top10++;}}));
+  Object.values(modes).forEach(m=>{m.jpRate=m.eligible?+(m.hits/m.eligible*100).toFixed(2):0;m.avgRank=m.ranks.length?+(m.ranks.reduce((a,b)=>a+b,0)/m.ranks.length).toFixed(2):null;});
+  return{totalSlots:rows.length,modes};
+}
+async function runHarianRecalculation(saveRemote=false){
+  const btn=$id('harianRecalcBtn');const status=$id('harianRecalcStatus');
+  if(btn){btn.disabled=true;btn.textContent='⏳ RECALCULATING…';}
+  if(status)status.textContent='Membaca histori RAW + RESULT dan menjalankan HARIAN V2 terbaru secara walk-forward…';
+  try{
+    const source=[...(rawLog||[])].filter(r=>r&&r.date&&r.raw&&r.raw.length===8&&r.result&&r.result!=='ZONK').sort((a,b)=>{
+      const ka=`${a.date}|${HARIAN_SESSION_ORDER[a.session]??9}|${a.slot||0}`;
+      const kb=`${b.date}|${HARIAN_SESSION_ORDER[b.session]??9}|${b.slot||0}`;
+      return ka.localeCompare(kb);
+    });
+    const rows=[];
+    for(const r of source)rows.push(_harianRecalcOne(r));
+    const summary=_harianRecalcSummarize(rows);
+    harianRecalcLast={version:HARIAN_RECALC_VERSION,calculatedAt:new Date().toISOString(),summary,rows};
+    if(saveRemote&&typeof SBData!=='undefined'&&SBData.upsertHarianRecalcAudit){
+      const payload=rows.map(r=>({entry_date:r.date,sess_key:r.session,slot:r.slot,raw:r.raw,actual_result:r.actualResult,engine_version:r.engineVersion,recalc_version:HARIAN_RECALC_VERSION,candidates:r.candidates,comparison:r.evaluation,metrics:{}}));
+      const sr=await SBData.upsertHarianRecalcAudit(payload);
+      if(!sr.ok)throw new Error(sr.reason||'Gagal menyimpan audit recalculation');
+    }
+    renderHarianRecalcBox();
+    if(status)status.textContent=`✓ Selesai · ${rows.length} slot diuji${saveRemote?' · hasil tersimpan ke Supabase':''}`;
+    return harianRecalcLast;
+  }catch(e){
+    if(status)status.textContent='✕ Recalculation gagal: '+String(e&&e.message||e);
+    console.error('[HARIAN RECALC]',e);return null;
+  }finally{if(btn){btn.disabled=false;btn.textContent='🔄 RECALCULATE HARIAN V2';}}
+}
+function _recalcModeLine(label,m){
+  if(!m)return'';
+  return `<div style="display:flex;justify-content:space-between;gap:8px;padding:5px 7px;background:var(--panel2);border-radius:5px;margin:3px 0;font-size:9px"><span style="color:#fff">${label}</span><span style="color:var(--green)">${m.hits}/${m.eligible} JP · ${m.jpRate}%</span><span style="color:var(--dim)">Top3 ${m.top3} · Top5 ${m.top5} · Top10 ${m.top10} · avg# ${m.avgRank??'-'}</span></div>`;
+}
+function renderHarianRecalcBox(){
+  const el=$id('harianRecalcBox');if(!el)return;
+  const s=harianRecalcLast&&harianRecalcLast.summary;
+  el.innerHTML=`<div class="input-section" style="margin:12px 0;border-color:var(--purple)">
+    <div class="input-title" style="color:var(--purple)">🧪 HARIAN V2 RECALCULATION / BACKTEST</div>
+    <div style="font-size:8px;color:var(--dim);line-height:1.45;margin-bottom:8px">Uji kandidat FRESH dari engine HARIAN V2 yang sedang aktif terhadap RAW + RESULT historis. Kandidat lama <b style="color:#fff">tidak dipakai</b> sebagai input. Perhitungan walk-forward mengikuti tanggal masing-masing entry dan tidak mengubah histori asli.</div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap">
+      <button id="harianRecalcBtn" class="btn btn-undo" style="flex:1;min-width:180px;border-color:var(--purple);color:var(--purple)" onclick="runHarianRecalculation(false)">🔄 RECALCULATE HARIAN V2</button>
+      <button class="btn btn-undo" style="flex:1;min-width:180px" onclick="runHarianRecalculation(true)">💾 RECALC + SIMPAN SUPABASE</button>
+    </div>
+    <div id="harianRecalcStatus" style="font-size:8px;color:var(--dim);margin-top:6px">${s?`Terakhir: ${new Date(harianRecalcLast.calculatedAt).toLocaleString('id-ID')} · ${s.totalSlots} slot`:'Belum dijalankan.'}</div>
+    ${s?`<div style="margin-top:8px;font-size:8px;color:var(--gold);letter-spacing:1px">HASIL ENGINE BARU</div>${_recalcModeLine('4D',s.modes[4])}${_recalcModeLine('3D',s.modes[3])}${_recalcModeLine('2D',s.modes[2])}${_recalcModeLine('KEMBAR',s.modes.kembar)}<div style="font-size:7px;color:var(--dim);margin-top:5px">JP Rate = result aktual masuk kandidat engine baru. Rank dihitung hanya untuk hit. Kandidat lama tidak digunakan.</div>`:''}
+  </div>`;
 }
 
 let harianLogPage=0;
@@ -15380,6 +15483,18 @@ const AHSyncEngine=(function(){
     }
   }
 
+  // HARIAN RECALC AUDIT — append/upsert per (date,session,slot,version).
+  // Tidak menyentuh raw_log/entries/prediction state.
+  async function upsertHarianRecalcAudit(arr){
+    if(!arr||!arr.length)return{ok:false,reason:'empty_recalc'};
+    const c=_client();if(!c)return{ok:false,reason:'no_client'};
+    const uid=await _uid();if(!uid)return{ok:false,reason:'no_user'};
+    const rows=arr.map(e=>({user_id:uid,entry_date:e.entry_date,sess_key:e.sess_key,slot:e.slot,raw:e.raw,actual_result:e.actual_result,engine_version:e.engine_version,recalc_version:e.recalc_version,candidates:e.candidates||{},comparison:e.comparison||{},metrics:e.metrics||{}}));
+    const{error}=await c.from('harian_recalc_audit').upsert(rows,{onConflict:'user_id,entry_date,sess_key,slot,recalc_version'});
+    if(error)return{ok:false,reason:error.message};
+    return{ok:true};
+  }
+
   return{
     init,syncNow,push,pull,updateStatus,setLastSync,getLastSync,getState,markPending,markPendingExtended,
     getAuditLog,getConflictLog,_renderSyncPanel,
@@ -15408,6 +15523,7 @@ const AHSyncEngine=(function(){
     _applySafeAppendMerge,
     // Sprint 7 (fondasi checksum versioning -- lihat catatan di _fetchServerStableChecksum)
     _buildCombinedChecksum,_fetchServerStableChecksum,CHECKSUM_VERSION,parseCombinedChecksum,
+    upsertHarianRecalcAudit,
     // Blueprint 2026-08 (reset total server, lihat resetSemuaDataHistoris)
     hardResetRemote,
     _TESTING_setClient,_TESTING_reset

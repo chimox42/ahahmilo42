@@ -7551,7 +7551,33 @@ function submitPredSlotResultCascade(kind,sessKey,slot){
   const inp=$id(`${kind==='v2'?'predV2SlotResultInp_':'predSlotResultInp_'}${sessKey}_${slot}`);
   const msg=$id(`${kind==='v2'?'predV2SlotResultMsg_':'predSlotResultMsg_'}${sessKey}_${slot}`);
   if(!inp)return;
-  const c=_cascadeResultSuffixes(inp.value);
+  // 2026-08-29 (permintaan user): kolom RESULT sekarang isi DIGIT, bukan
+  // huruf manual lagi. Konversi digit->huruf dilakukan di sini pakai RAW
+  // 8-digit slot yang sama (digitToLetter, sama persis pola yang sudah
+  // dipakai evalRawSourceForResult() di tab HARIAN) -- baru hasil huruf
+  // itu dilempar ke _cascadeResultSuffixes() seperti alur lama, TIDAK ADA
+  // perubahan pada logic cascade 2H/3H/4H itu sendiri.
+  const rawVal=String(inp.value||'').trim().toUpperCase();
+  let letterVal=rawVal;
+  if(rawVal!=='ZONK'){
+    const rawEl=$id((kind==='v2'?'predV2RawInput_':'predRawInput_')+sessKey+'_'+slot);
+    const rawDigits=(rawEl&&rawEl.value)||(rawDraft&&rawDraft.date===date&&rawDraft.vals&&rawDraft.vals[sessKey]&&rawDraft.vals[sessKey][slot])||'';
+    if(!rawDigits||rawDigits.length!==8){
+      if(msg){msg.style.display='block';msg.textContent='⚠ Isi RAW 8 digit slot ini dulu sebelum submit result';msg.style.color='var(--red)';}
+      return;
+    }
+    let letters='';
+    for(const ch of rawVal){
+      const letter=digitToLetter(ch,rawDigits);
+      if(!letter){
+        if(msg){msg.style.display='block';msg.textContent=`⚠ Digit ${ch} tidak ditemukan di RAW slot ini`;msg.style.color='var(--red)';}
+        return;
+      }
+      letters+=letter;
+    }
+    letterVal=letters;
+  }
+  const c=_cascadeResultSuffixes(letterVal);
   if(c.error){
     if(msg){msg.style.display='block';msg.textContent='⚠ '+c.error;msg.style.color='var(--red)';}
     return;
@@ -7571,6 +7597,38 @@ function submitPredSlotResultCascade(kind,sessKey,slot){
   [2,3,4].forEach(n=>{try{renderPred(n);}catch(e){}});
   if(kind==='v2')[2,3,4].forEach(n=>{try{renderPredV2(n);}catch(e){}});
 }
+// ============================================================
+// PREVIEW KANDIDAT OTOMATIS DI PANEL RAW PRED V1/V2 (permintaan user,
+// 2026-08-29). Begitu RAW 1 slot lengkap 8 digit, tampilkan 2H/3H/4H
+// SEKALIGUS di bawah kolom RAW itu -- murni tampilan (read-only), pakai
+// kandidat yang SAMA dengan yang sudah tersimpan predSlotLog kalau ada
+// (biar konsisten dgn hasil final), atau dihitung on-the-fly kalau belum
+// ada entri (TIDAK menulis log baru dari sini -- penulisan log tetap
+// lewat _autoGeneratePredSlotEntry seperti biasa).
+// ============================================================
+function _predRawCandidatesPreview(kind,dateISO,rawDigits){
+  if(!rawDigits||rawDigits.length!==8)return'';
+  let rows='';
+  [2,3,4].forEach(n=>{
+    let candidates=[];
+    try{
+      const log=kind==='v2'?(predSlotLogV2[n]||(predSlotLogV2[n]=loadPredSlotLogV2(n))):(predSlotLog[n]||(predSlotLog[n]=loadPredSlotLog(n)));
+      const existing=log&&log.find(e=>e.dateISO===dateISO);
+      if(existing&&existing.candidates&&existing.candidates.length){
+        candidates=existing.candidates;
+      }else{
+        const c=kind==='v2'?_computePredSlotCandidatesAsOfV2(n,dateISO):_computePredSlotCandidatesAsOf(n,dateISO);
+        candidates=c.candidates||[];
+      }
+    }catch(e){candidates=[];}
+    const digitCands=candidates.map(c=>candidateToDigit(c,rawDigits)||c);
+    rows+=`<div style="margin-top:3px"><span style="font-size:7px;color:var(--purple);font-weight:700">${n}H</span> <span style="font-size:8px;color:var(--fg);letter-spacing:0.5px">${digitCands.join(' · ')||'—'}</span></div>`;
+  });
+  return`<div style="margin:5px 0;padding:5px 6px;border:1px solid rgba(160,120,255,.3);border-radius:6px;background:rgba(160,120,255,.06)">
+    <div style="font-size:7px;color:var(--purple)">🔮 KANDIDAT (asOf tanggal ini)</div>
+    ${rows}
+  </div>`;
+}
 function renderPredRawInputPanel(kind,n){
   // Panel ini SEKALI SAJA (n===2 dianggap "rumah"-nya) -- lihat catatan di
   // atas fungsi _cascadeResultSuffixes soal kenapa tidak lagi diduplikat
@@ -7583,7 +7641,7 @@ function renderPredRawInputPanel(kind,n){
   const draft=(rawDraft&&rawDraft.date===active&&rawDraft.vals)?rawDraft.vals:{};
   let h=`<div class="gen-box" style="border-color:${v2?'#7ee787':'var(--green)'};background:rgba(0,230,118,.035)">
     <div class="uni-title" style="color:${v2?'#7ee787':'var(--green)'}">🔢 INPUT RAW DATA — ${v2?'PRED V2':'PRED V1'}</div>
-    <div class="uni-sub">RAW master yang sama dengan tab HARIAN. Isi 8 digit per kolom; begitu lengkap, engine ${v2?'V2':'V1'} menghitung kandidatnya sendiri. Tidak perlu menunggu slot lain. Kolom RESULT cukup diisi <b style="color:var(--gold)">1x</b> (2-4 huruf, hasil terpanjang yang kamu tahu) — otomatis cascade turun jadi cek 3H & 2H juga, berlaku sekaligus untuk 2H/3H/4H, tidak perlu pindah tab dan ketik ulang.</div>
+    <div class="uni-sub">RAW master yang sama dengan tab HARIAN. Isi 8 digit per kolom; begitu lengkap, engine ${v2?'V2':'V1'} langsung menghitung & menampilkan kandidat 2H/3H/4H di bawah kolom RAW-nya sendiri. Tidak perlu menunggu slot lain. Kolom RESULT cukup diisi <b style="color:var(--gold)">1x</b> (2-4 <b style="color:var(--gold)">digit</b>, hasil terpanjang yang kamu tahu — tidak perlu convert ke huruf manual, sistem yang urus sendiri pakai RAW slot ini) — otomatis cascade turun jadi cek 3H & 2H juga, berlaku sekaligus untuk 2H/3H/4H, tidak perlu pindah tab dan ketik ulang.</div>
     <div class="uni-date-row" style="margin:8px 0">
       <label class="uni-date-label" for="${dateId}">📅 Tanggal RAW</label>
       <input type="date" class="uni-date-input" id="${dateId}" value="${active}" max="${todayISO()}" oninput="predRawDateChanged()">
@@ -7601,12 +7659,14 @@ function renderPredRawInputPanel(kind,n){
       const rid=(kind==='v2'?'predV2SlotResultInp_':'predSlotResultInp_')+sess.key+'_'+slot;
       const mid=(kind==='v2'?'predV2SlotResultMsg_':'predSlotResultMsg_')+sess.key+'_'+slot;
       const rn=(kind==='v2'?'v2':'v1');
+      const cid=(kind==='v2'?'predV2SlotCandPrev_':'predSlotCandPrev_')+sess.key+'_'+slot;
       h+=`<div style="flex:1 1 150px;min-width:140px">
         <div style="font-size:7px;color:var(--dim);margin-bottom:2px">SLOT ${slot}</div>
         <input class="letter-input" id="${prefix}${sess.key}_${slot}" maxlength="8" inputmode="numeric" placeholder="8 digit" value="${val}" style="width:100%;font-size:13px;letter-spacing:1.5px" oninput="predRawInputChanged('${kind}','${sess.key}',${slot})">
-        <div style="font-size:7px;color:var(--gold);margin:5px 0 3px">RESULT (2-4H, cascade) — ${kind==='v2'?'PRED V2':'PRED V1'}</div>
+        <div id="${cid}">${val&&val.length===8?_predRawCandidatesPreview(kind,active,val):''}</div>
+        <div style="font-size:7px;color:var(--gold);margin:5px 0 3px">RESULT (2-4 digit, cascade) — ${kind==='v2'?'PRED V2':'PRED V1'}</div>
         <div style="display:flex;gap:4px;align-items:stretch">
-          <input class="result-input" id="${rid}" maxlength="4" inputmode="text" placeholder="XXXX" style="flex:1;min-width:0;font-size:12px;padding:8px;letter-spacing:3px" oninput="this.value=this.value.toUpperCase().replace(/[^A-H]/g,'').slice(0,4)" onkeydown="if(event.key==='Enter')submitPredSlotResultCascade('${rn}','${sess.key}',${slot})">
+          <input class="result-input" id="${rid}" maxlength="4" inputmode="numeric" placeholder="digit" style="flex:1;min-width:0;font-size:12px;padding:8px;letter-spacing:3px" oninput="this.value=this.value.toUpperCase().replace(/[^0-9]/g,'').slice(0,4)" onkeydown="if(event.key==='Enter')submitPredSlotResultCascade('${rn}','${sess.key}',${slot})">
           <button class="btn-submit-result" style="padding:7px 9px;font-size:8px" onclick="submitPredSlotResultCascade('${rn}','${sess.key}',${slot})">CEK</button>
           <button class="btn-zonk" style="padding:7px 8px;font-size:8px" onclick="submitPredSlotResultCascadeZonk('${rn}','${sess.key}',${slot})">ZONK</button>
         </div>

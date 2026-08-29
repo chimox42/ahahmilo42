@@ -6962,6 +6962,20 @@ function _renderPredCandGroupHtml(label,list,cls,len,resultDigits,hasResult){
 // JP-rate masing2 (mirip semangat computeHariLengkapAccuracy utk PRED vs
 // AI PRED). Hari ini auto-terbuka; tanggal lampau di-collapse per tanggal
 // spy tidak sepanjang riwayat lama yg bikin bingung.
+// RINGKASAN HASIL PER-TANGGAL (2026-08-30, permintaan user) — murni
+// tambahan tampilan, tidak mengubah data/logika JP/ZONK yang sudah ada.
+// Menampilkan hasil (own atau cross, mana yang ada) tiap slot di baris
+// tanggal riwayat (collapsible), supaya bisa dicocokkan tanpa buka satu-satu.
+function _fmtDateResultSummary(entries,sessLabel,crossKey){
+  try{
+    return entries.map(e=>{
+      const label=sessLabel(e.sessKey)+(e.slot?(' S'+e.slot):'');
+      const cross=crossKey?e[crossKey]:null;
+      const val=e.actualResult||cross||'';
+      return label+': '+(val?val:'⏳');
+    }).join(' · ');
+  }catch(err){return '';}
+}
 function _renderPredPerSlotToday(n,cc){
   try{
     // FIX 2026-08-25 (permintaan user, ronde ke-2): sumber data DIGANTI LAGI
@@ -7044,6 +7058,7 @@ function _renderPredPerSlotToday(n,cc){
           <span style="font-size:9px;color:var(--gold)">🕐 ${sessLabel(e.sessKey)} · SLOT ${e.slot||1}</span>
           <span style="font-family:'Orbitron',monospace;font-size:11px;letter-spacing:1.5px;color:#fff">${e.raw||'-'}</span>
           <span style="font-size:8px;color:${anyJp?'var(--green)':(anyHas?'var(--red)':'var(--dim)')}">${statusText}</span>
+          <span title="Hapus entry ini" style="cursor:pointer;font-size:11px;padding:2px 4px" onclick="deletePredSlotEntry('v1',${n},'${e.id}')">🗑️</span>
         </div>
         ${_renderPredCandGroupHtml('KANDIDAT '+n+'D (mesin PRED sendiri, pola historis)',list,cc,n,resultDigitsShown,anyHas)}
         ${tier2Html}
@@ -7068,7 +7083,7 @@ function _renderPredPerSlotToday(n,cc){
         entries.forEach(e=>{html+=renderEntry(e);});
       }else{
         const anyHit=entries.some(e=>e.isJp||e.isCrossJp);
-        html+=`<details style="margin-bottom:4px"><summary style="font-size:8px;color:var(--dim);cursor:pointer;padding:4px 0">📅 ${isoToDisplay(d)} · ${entries.length} slot ${anyHit?'🏆':''}</summary>`;
+        html+=`<details style="margin-bottom:4px"><summary style="font-size:8px;color:var(--dim);cursor:pointer;padding:4px 0">📅 ${isoToDisplay(d)} · ${entries.length} slot ${anyHit?'🏆':''}<div style="margin-top:2px;color:var(--text);opacity:0.85">Hasil: ${_fmtDateResultSummary(entries,sessLabel,'crossResult')}</div></summary>`;
         entries.forEach(e=>{html+=renderEntry(e);});
         html+='</details>';
       }
@@ -7218,7 +7233,7 @@ function _renderPredPerSlotFullHistory(n,cc){
       <div style="padding:0 10px 8px">`;
     dates.forEach(d=>{
       const entries=byDate[d];
-      html+=`<details style="margin-bottom:4px"><summary style="font-size:8px;color:var(--dim);cursor:pointer;padding:4px 0">📅 ${isoToDisplay(d)} · ${entries.length} slot ${dateHasJp[d]?'🏆':''}</summary>`;
+      html+=`<details style="margin-bottom:4px"><summary style="font-size:8px;color:var(--dim);cursor:pointer;padding:4px 0">📅 ${isoToDisplay(d)} · ${entries.length} slot ${dateHasJp[d]?'🏆':''}<div style="margin-top:2px;color:var(--text);opacity:0.85">Hasil: ${_fmtDateResultSummary(entries,sessLabel,'_curCrossResult')}</div></summary>`;
       entries.forEach(e=>{html+=renderEntry(e);});
       html+='</details>';
     });
@@ -7273,6 +7288,7 @@ function _renderPredPerSlotTodayV2(n,cc){
           <span style="font-size:9px;color:var(--gold)">🕐 ${sessLabel(e.sessKey)} · SLOT ${e.slot||1}</span>
           <span style="font-family:'Orbitron',monospace;font-size:11px;letter-spacing:1.5px;color:#fff">${e.raw||'-'}</span>
           <span style="font-size:8px;color:${anyJp?'var(--green)':(anyHas?'var(--red)':'var(--dim)')}">${statusText}</span>
+          <span title="Hapus entry ini" style="cursor:pointer;font-size:11px;padding:2px 4px" onclick="deletePredSlotEntry('v2',${n},'${e.id}')">🗑️</span>
         </div>
         ${_renderPredCandGroupHtml('KANDIDAT '+n+'D (Batch 2, per-posisi joint probability)',list,cc,n,resultDigitsShown,anyHas)}
       </div>`;
@@ -7296,7 +7312,7 @@ function _renderPredPerSlotTodayV2(n,cc){
         entries.forEach(e=>{html+=renderEntry(e);});
       }else{
         const anyHit=entries.some(e=>e.isJp||e.isCrossJp);
-        html+=`<details style="margin-bottom:4px"><summary style="font-size:8px;color:var(--dim);cursor:pointer;padding:4px 0">📅 ${isoToDisplay(d)} · ${entries.length} slot ${anyHit?'🏆':''}</summary>`;
+        html+=`<details style="margin-bottom:4px"><summary style="font-size:8px;color:var(--dim);cursor:pointer;padding:4px 0">📅 ${isoToDisplay(d)} · ${entries.length} slot ${anyHit?'🏆':''}<div style="margin-top:2px;color:var(--text);opacity:0.85">Hasil: ${_fmtDateResultSummary(entries,sessLabel,'crossResult')}</div></summary>`;
         entries.forEach(e=>{html+=renderEntry(e);});
         html+='</details>';
       }
@@ -7390,7 +7406,7 @@ function _renderPredPerSlotFullHistoryV2(n,cc){
       <div style="padding:0 10px 8px">`;
     dates.forEach(d=>{
       const entries=byDate[d];
-      html+=`<details style="margin-bottom:4px"><summary style="font-size:8px;color:var(--dim);cursor:pointer;padding:4px 0">📅 ${isoToDisplay(d)} · ${entries.length} slot ${dateHasJp[d]?'🏆':''}</summary>`;
+      html+=`<details style="margin-bottom:4px"><summary style="font-size:8px;color:var(--dim);cursor:pointer;padding:4px 0">📅 ${isoToDisplay(d)} · ${entries.length} slot ${dateHasJp[d]?'🏆':''}<div style="margin-top:2px;color:var(--text);opacity:0.85">Hasil: ${_fmtDateResultSummary(entries,sessLabel,'_curCrossResultV2')}</div></summary>`;
       entries.forEach(e=>{html+=renderEntry(e);});
       html+='</details>';
     });
@@ -7546,66 +7562,89 @@ function _cascadeResultSuffixes(resultRaw){
   values[2]=r.slice(-2);
   return{values};
 }
+// 2026-08-30 (permintaan user): hapus 1 entry PRED PER-SLOT (mesin sendiri,
+// predSlotLog/predSlotLogV2) -- dipakai buat buang entry yg gak cocok/data
+// test lama. savePredSlotLog(V2) melakukan REPLACE PENUH per mode ke
+// Supabase, jadi splice lokal di sini otomatis ke-sync sbg penghapusan juga.
+// Scope SENGAJA cuma predSlotLog/predSlotLogV2 (list "PRED PER-SLOT (mesin
+// sendiri)") -- TIDAK termasuk RIWAYAT LENGKAP (harianPredGenLog, sumber
+// beda) sesuai blueprint yg di-ACC.
+function deletePredSlotEntry(kind,n,id){
+  if(!confirm(`Hapus entry PRED per-slot ini (mode ${n}H)? Tindakan ini tidak bisa dibatalkan.`))return;
+  const log=kind==='v2'?predSlotLogV2[n]:predSlotLog[n];
+  if(!log)return;
+  const idx=log.findIndex(e=>e.id===id);
+  if(idx<0)return;
+  log.splice(idx,1);
+  if(kind==='v2'){savePredSlotLogV2(n);renderPredV2(n);}
+  else{savePredSlotLog(n);renderPred(n);}
+}
 function submitPredSlotResultCascade(kind,sessKey,slot){
   const date=_predRawActiveDate();
   const inp=$id(`${kind==='v2'?'predV2SlotResultInp_':'predSlotResultInp_'}${sessKey}_${slot}`);
   const msg=$id(`${kind==='v2'?'predV2SlotResultMsg_':'predSlotResultMsg_'}${sessKey}_${slot}`);
   if(!inp)return;
   // 2026-08-29 (permintaan user): kolom RESULT isi DIGIT, bukan huruf manual.
-  // 2026-08-29 (lanjutan, permintaan user): ditambah CROSSING antar slot dalam
-  // sesi yang sama -- result slot 1 juga dicek terhadap RAW slot 2 dan
-  // sebaliknya, pakai fungsi deriveResultFromRawSourcesV2() yang SAMA PERSIS
-  // dengan yang sudah dipakai & teruji di tab HARIAN (own vs neighbor,
-  // match terbanyak menang, hasil akhir 100% dari SATU raw pemenang, ZONK
-  // otomatis kalau dua-duanya gagal). Logic cascade 2H/3H/4H (_cascadeResultSuffixes)
-  // sendiri TIDAK diubah -- cuma sumber "letters"-nya yang sekarang bisa dari
-  // raw sendiri ATAU raw pasangan.
+  // Konversi digit->huruf pakai RAW SLOT SENDIRI saja (digitToLetter) --
+  // sama seperti alur asli sebelum ada percobaan crossing yang salah arah.
+  //
+  // 2026-08-30 (KOREKSI, permintaan user): percobaan crossing sebelumnya
+  // (deriveResultFromRawSourcesV2, mutusin RAW mana yg "menang" utk dekode
+  // digit) SALAH ARAH -- ternyata sistem crossing yg BENAR sudah ada dari
+  // 27 Agustus: _fillPredSlotResult()/_fillPredSlotResultV2() (dipanggil dari
+  // HARIAN begitu result asli masuk) -- isi actualResult SLOT SENDIRI, DAN
+  // SEKALIGUS crossResult di entry slot PASANGAN (field terpisah, supaya dua
+  // slot bisa dinilai independen thd SATU result yg sama). Sekarang panel
+  // manual CEK ini pakai fungsi yg SAMA PERSIS itu, bukan bikin logic baru --
+  // jadi "menunggu result" di slot pasangan otomatis kebaca begitu slot ini
+  // disubmit, lengkap dgn catatan kecil sumbernya (dari slot mana).
   const rawVal=String(inp.value||'').trim().toUpperCase();
-  let letterVal=rawVal, crossSource=null, crossSlot=null;
+  let letterVal=rawVal;
   if(rawVal!=='ZONK'){
-    const sessDef=HARIAN_SESSIONS.find(s=>s.key===sessKey);
-    const totalSlots=(sessDef&&sessDef.slots)||1;
-    const rawList=[];
-    for(let s=1;s<=totalSlots;s++){
-      const rawEl=$id((kind==='v2'?'predV2RawInput_':'predRawInput_')+sessKey+'_'+s);
-      const digits=(rawEl&&rawEl.value)||(rawDraft&&rawDraft.date===date&&rawDraft.vals&&rawDraft.vals[sessKey]&&rawDraft.vals[sessKey][s])||'';
-      rawList.push({slot:s,digits});
-    }
-    const anyRawFilled=rawList.some(r=>r.digits&&r.digits.length===8);
-    if(!anyRawFilled){
-      if(msg){msg.style.display='block';msg.textContent='⚠ Isi RAW 8 digit (slot ini atau slot pasangannya) dulu sebelum submit result';msg.style.color='var(--red)';}
+    const rawEl=$id((kind==='v2'?'predV2RawInput_':'predRawInput_')+sessKey+'_'+slot);
+    const rawDigits=(rawEl&&rawEl.value)||(rawDraft&&rawDraft.date===date&&rawDraft.vals&&rawDraft.vals[sessKey]&&rawDraft.vals[sessKey][slot])||'';
+    if(!rawDigits||rawDigits.length!==8){
+      if(msg){msg.style.display='block';msg.textContent='⚠ Isi RAW 8 digit slot ini dulu sebelum submit result';msg.style.color='var(--red)';}
       return;
     }
-    const d=deriveResultFromRawSourcesV2(rawVal,rawList,slot);
-    if(d.zonk){
-      [2,3,4].forEach(n=>{_setPredSlotManualResult(kind,n,date,sessKey,slot,'ZONK');});
-      if(msg){msg.style.display='block';msg.textContent='💀 '+(d.reason||'ZONK otomatis: tidak cocok di RAW manapun');msg.style.color='var(--accent2)';}
-      inp.value='';
-      [2,3,4].forEach(n=>{try{renderPred(n);}catch(e){}});
-      if(kind==='v2')[2,3,4].forEach(n=>{try{renderPredV2(n);}catch(e){}});
-      return;
+    let letters='';
+    for(const ch of rawVal){
+      const letter=digitToLetter(ch,rawDigits);
+      if(!letter){
+        if(msg){msg.style.display='block';msg.textContent=`⚠ Digit ${ch} tidak ditemukan di RAW slot ini`;msg.style.color='var(--red)';}
+        return;
+      }
+      letters+=letter;
     }
-    letterVal=d.letters;
-    crossSource=d.source;
-    crossSlot=d.sourceSlot;
+    letterVal=letters;
   }
   const c=_cascadeResultSuffixes(letterVal);
   if(c.error){
     if(msg){msg.style.display='block';msg.textContent='⚠ '+c.error;msg.style.color='var(--red)';}
     return;
   }
+  const sessDef=HARIAN_SESSIONS.find(s=>s.key===sessKey);
+  const sessSlots=(sessDef&&sessDef.slots)||1;
+  const otherSlot=slot===1?2:1;
   const lines=[];
   if(c.zonk){
     [2,3,4].forEach(n=>{_setPredSlotManualResult(kind,n,date,sessKey,slot,'ZONK');lines.push(n+'H:💀');});
   }else{
     Object.keys(c.values).forEach(nStr=>{
       const n=Number(nStr);
-      const r=_setPredSlotManualResult(kind,n,date,sessKey,slot,c.values[n]);
-      lines.push(r.ok?(n+'H:'+(r.isJp?'🏆#'+(r.hitIdx+1):'💀')):(n+'H:⚠'));
+      const val=c.values[n];
+      _predSlotResultEntry(kind,n,date,sessKey,slot); // pastikan entry ada dulu
+      if(kind==='v2')_fillPredSlotResultV2(date,sessKey,slot,val,sessSlots);
+      else _fillPredSlotResult(date,sessKey,slot,val,sessSlots);
+      const log=kind==='v2'?(predSlotLogV2[n]||[]):(predSlotLog[n]||[]);
+      const e=log.find(x=>x.dupKey===date+'|'+sessKey+'|'+slot);
+      const isJp=e?e.isJp:null,hitIdx=e?e.hitIdx:null;
+      let line=n+'H:'+(isJp?'🏆#'+(hitIdx+1):'💀');
+      if(sessSlots===2)line+=` (↔ jg tercatat sbg cross utk slot ${otherSlot})`;
+      lines.push(line);
     });
   }
-  const sourceNote=crossSource==='neighbor'?` (↔ dari RAW slot ${crossSlot})`:'';
-  if(msg){msg.style.display='block';msg.textContent=lines.join('  ')+sourceNote;msg.style.color=lines.some(l=>l.includes('🏆'))?'var(--green)':'var(--accent2)';}
+  if(msg){msg.style.display='block';msg.textContent=lines.join('  ');msg.style.color=lines.some(l=>l.includes('🏆'))?'var(--green)':'var(--accent2)';}
   inp.value='';
   [2,3,4].forEach(n=>{try{renderPred(n);}catch(e){}});
   if(kind==='v2')[2,3,4].forEach(n=>{try{renderPredV2(n);}catch(e){}});

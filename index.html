@@ -7551,31 +7551,43 @@ function submitPredSlotResultCascade(kind,sessKey,slot){
   const inp=$id(`${kind==='v2'?'predV2SlotResultInp_':'predSlotResultInp_'}${sessKey}_${slot}`);
   const msg=$id(`${kind==='v2'?'predV2SlotResultMsg_':'predSlotResultMsg_'}${sessKey}_${slot}`);
   if(!inp)return;
-  // 2026-08-29 (permintaan user): kolom RESULT sekarang isi DIGIT, bukan
-  // huruf manual lagi. Konversi digit->huruf dilakukan di sini pakai RAW
-  // 8-digit slot yang sama (digitToLetter, sama persis pola yang sudah
-  // dipakai evalRawSourceForResult() di tab HARIAN) -- baru hasil huruf
-  // itu dilempar ke _cascadeResultSuffixes() seperti alur lama, TIDAK ADA
-  // perubahan pada logic cascade 2H/3H/4H itu sendiri.
+  // 2026-08-29 (permintaan user): kolom RESULT isi DIGIT, bukan huruf manual.
+  // 2026-08-29 (lanjutan, permintaan user): ditambah CROSSING antar slot dalam
+  // sesi yang sama -- result slot 1 juga dicek terhadap RAW slot 2 dan
+  // sebaliknya, pakai fungsi deriveResultFromRawSourcesV2() yang SAMA PERSIS
+  // dengan yang sudah dipakai & teruji di tab HARIAN (own vs neighbor,
+  // match terbanyak menang, hasil akhir 100% dari SATU raw pemenang, ZONK
+  // otomatis kalau dua-duanya gagal). Logic cascade 2H/3H/4H (_cascadeResultSuffixes)
+  // sendiri TIDAK diubah -- cuma sumber "letters"-nya yang sekarang bisa dari
+  // raw sendiri ATAU raw pasangan.
   const rawVal=String(inp.value||'').trim().toUpperCase();
-  let letterVal=rawVal;
+  let letterVal=rawVal, crossSource=null, crossSlot=null;
   if(rawVal!=='ZONK'){
-    const rawEl=$id((kind==='v2'?'predV2RawInput_':'predRawInput_')+sessKey+'_'+slot);
-    const rawDigits=(rawEl&&rawEl.value)||(rawDraft&&rawDraft.date===date&&rawDraft.vals&&rawDraft.vals[sessKey]&&rawDraft.vals[sessKey][slot])||'';
-    if(!rawDigits||rawDigits.length!==8){
-      if(msg){msg.style.display='block';msg.textContent='⚠ Isi RAW 8 digit slot ini dulu sebelum submit result';msg.style.color='var(--red)';}
+    const sessDef=HARIAN_SESSIONS.find(s=>s.key===sessKey);
+    const totalSlots=(sessDef&&sessDef.slots)||1;
+    const rawList=[];
+    for(let s=1;s<=totalSlots;s++){
+      const rawEl=$id((kind==='v2'?'predV2RawInput_':'predRawInput_')+sessKey+'_'+s);
+      const digits=(rawEl&&rawEl.value)||(rawDraft&&rawDraft.date===date&&rawDraft.vals&&rawDraft.vals[sessKey]&&rawDraft.vals[sessKey][s])||'';
+      rawList.push({slot:s,digits});
+    }
+    const anyRawFilled=rawList.some(r=>r.digits&&r.digits.length===8);
+    if(!anyRawFilled){
+      if(msg){msg.style.display='block';msg.textContent='⚠ Isi RAW 8 digit (slot ini atau slot pasangannya) dulu sebelum submit result';msg.style.color='var(--red)';}
       return;
     }
-    let letters='';
-    for(const ch of rawVal){
-      const letter=digitToLetter(ch,rawDigits);
-      if(!letter){
-        if(msg){msg.style.display='block';msg.textContent=`⚠ Digit ${ch} tidak ditemukan di RAW slot ini`;msg.style.color='var(--red)';}
-        return;
-      }
-      letters+=letter;
+    const d=deriveResultFromRawSourcesV2(rawVal,rawList,slot);
+    if(d.zonk){
+      [2,3,4].forEach(n=>{_setPredSlotManualResult(kind,n,date,sessKey,slot,'ZONK');});
+      if(msg){msg.style.display='block';msg.textContent='💀 '+(d.reason||'ZONK otomatis: tidak cocok di RAW manapun');msg.style.color='var(--accent2)';}
+      inp.value='';
+      [2,3,4].forEach(n=>{try{renderPred(n);}catch(e){}});
+      if(kind==='v2')[2,3,4].forEach(n=>{try{renderPredV2(n);}catch(e){}});
+      return;
     }
-    letterVal=letters;
+    letterVal=d.letters;
+    crossSource=d.source;
+    crossSlot=d.sourceSlot;
   }
   const c=_cascadeResultSuffixes(letterVal);
   if(c.error){
@@ -7592,7 +7604,8 @@ function submitPredSlotResultCascade(kind,sessKey,slot){
       lines.push(r.ok?(n+'H:'+(r.isJp?'🏆#'+(r.hitIdx+1):'💀')):(n+'H:⚠'));
     });
   }
-  if(msg){msg.style.display='block';msg.textContent=lines.join('  ');msg.style.color=lines.some(l=>l.includes('🏆'))?'var(--green)':'var(--accent2)';}
+  const sourceNote=crossSource==='neighbor'?` (↔ dari RAW slot ${crossSlot})`:'';
+  if(msg){msg.style.display='block';msg.textContent=lines.join('  ')+sourceNote;msg.style.color=lines.some(l=>l.includes('🏆'))?'var(--green)':'var(--accent2)';}
   inp.value='';
   [2,3,4].forEach(n=>{try{renderPred(n);}catch(e){}});
   if(kind==='v2')[2,3,4].forEach(n=>{try{renderPredV2(n);}catch(e){}});

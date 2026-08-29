@@ -929,6 +929,31 @@ function removeNormalEntry(n,v,d){
   saveData(n,state[n]);
   return true;
 }
+// Hapus SEMUA entry di pool state[n] yang tanggalnya sama dengan dateISO
+// (tanpa perlu tahu value lamanya) — dipakai jalur submit Pred/Backdate
+// SUPAYA input ulang di tanggal yang sama MENGGANTI, bukan menumpuk duplikat.
+function removeMainPoolEntriesForDate(n,dateISO){
+  let changed=false,idx;
+  while((idx=state[n].findIndex(item=>item&&typeof item==='object'&&(item.d||null)===(dateISO||null)))>=0){
+    state[n].splice(idx,1);
+    changed=true;
+  }
+  if(changed)state[n].forEach((it,i)=>{if(it&&typeof it==='object')it.putaran=i+1;});
+  return changed;
+}
+// Sama, tapi untuk pool Kembar 1 tipe tertentu — dipakai jalur submit
+// Kembar/Backdate Kembar SUPAYA input ulang di tanggal yang sama MENGGANTI.
+function removeKembarEntriesForDate(type,dateISO){
+  kmbAlignMeta(type);
+  let changed=false,idx;
+  while((idx=kMeta[type].findIndex(m=>m&&(m.d||null)===(dateISO||null)))>=0){
+    kState[type].splice(idx,1);
+    kMeta[type].splice(idx,1);
+    changed=true;
+  }
+  if(changed){kmbSaveByType(type,kState[type]);kmbSaveMeta(type,kMeta[type]);}
+  return changed;
+}
 // Sama, tapi untuk pool Kembar (kState+kMeta paralel)
 function removeKembarEntry(type,v,d){
   kmbAlignMeta(type);
@@ -7430,7 +7455,80 @@ function predRawInputChanged(kind,sessKey,slot){
     try{renderPredV2(activePredSubV2||2);}catch(e){}
   }
 }
-function renderPredRawInputPanel(kind){
+// ============================================================
+// RESULT PER-SLOT DI TAB PRED V1/V2 (2026-08-28)
+// Result di panel RAW bersifat per sesi + slot, supaya user bisa langsung
+// mengunci evaluasi kandidat tanpa harus turun ke panel RESULT global.
+// ZONK boleh ditekan walaupun RAW slot kosong: itu berarti slot tersebut
+// memang tidak memiliki result/prediksi yang akan dinilai dan tetap dicatat
+// sebagai ZONK untuk mesin yang bersangkutan. Data kandidat/result V1
+// tersimpan lewat predSlotLog -> Supabase; V2 memakai namespace V2 sendiri.
+// ============================================================
+function _predSlotResultEntry(kind,n,dateISO,sessKey,slot){
+  const log=kind==='v2'?(predSlotLogV2[n]||(predSlotLogV2[n]=loadPredSlotLogV2(n))):(predSlotLog[n]||(predSlotLog[n]=loadPredSlotLog(n)));
+  const dupKey=dateISO+'|'+sessKey+'|'+slot;
+  let e=log.find(x=>x.dupKey===dupKey);
+  if(!e){
+    let candidates=[],candidateSources=[];
+    try{
+      const c=kind==='v2'?_computePredSlotCandidatesAsOfV2(n,dateISO):_computePredSlotCandidatesAsOf(n,dateISO);
+      candidates=c.candidates||[];candidateSources=c.candidateSources||[];
+    }catch(err){}
+    e={id:(kind==='v2'?'psv2_':'ps_')+Date.now()+'_'+dateISO+'_'+sessKey+'_'+slot,dupKey,dateISO,sessKey,slot,raw:'',candidates,candidateSources,generatedAt:Date.now(),actualResult:null,isJp:null,hitIdx:null};
+    log.push(e);
+  }
+  return e;
+}
+function _setPredSlotManualResult(kind,n,dateISO,sessKey,slot,value){
+  const raw=String(value||'').trim().toUpperCase();
+  const isZonk=raw==='ZONK';
+  if(!isZonk){
+    if(raw.length!==n)return{ok:false,msg:`Harus tepat ${n} huruf A-H`};
+    for(const ch of raw)if(!LETTERS.includes(ch))return{ok:false,msg:`Huruf tidak valid: ${ch}`};
+    if(new Set(raw).size!==n)return{ok:false,msg:'Huruf tidak boleh sama'};
+  }
+  const e=_predSlotResultEntry(kind,n,dateISO,sessKey,slot);
+  // Ambil RAW aktual dari draft bila entry dibuat sebelum RAW selesai.
+  try{
+    const rd=rawDraft&&rawDraft.date===dateISO&&rawDraft.vals&&rawDraft.vals[sessKey]&&rawDraft.vals[sessKey][slot];
+    if(rd)e.raw=rd;
+  }catch(err){}
+  if(isZonk){
+    e.actualResult='ZONK';e.isJp=false;e.hitIdx=null;
+  }else{
+    const hitIdx=(e.candidates||[]).indexOf(raw);
+    e.actualResult=raw;e.isJp=hitIdx>=0;e.hitIdx=hitIdx;
+  }
+  if(kind==='v2')savePredSlotLogV2(n);else savePredSlotLog(n);
+  return{ok:true,isJp:!isZonk&&e.isJp,value:raw,hitIdx:e.hitIdx};
+}
+function submitPredSlotResult(kind,n,sessKey,slot){
+  const date=_predRawActiveDate();
+  const inp=$id(`${kind==='v2'?'predV2SlotResultInp_':'predSlotResultInp_'}${sessKey}_${slot}_${n}`);
+  const msg=$id(`${kind==='v2'?'predV2SlotResultMsg_':'predSlotResultMsg_'}${sessKey}_${slot}_${n}`);
+  if(!inp)return;
+  const r=_setPredSlotManualResult(kind,n,date,sessKey,slot,inp.value);
+  if(msg){
+    msg.style.display='block';
+    if(!r.ok){msg.textContent='⚠ '+r.msg;msg.style.color='var(--red)';}
+    else{msg.textContent=r.value==='ZONK'?'💀 ZONK tersimpan':(r.isJp?'🏆 JP — kandidat ditemukan #'+(r.hitIdx+1):'💀 ZONK — tidak ada di 15 kandidat');msg.style.color=r.isJp?'var(--green)':'var(--accent2)';}
+  }
+  if(r.ok){inp.value='';renderPred(kind==='v2'?n:n);if(kind==='v2')renderPredV2(n);}
+}
+function markPredSlotZonk(kind,n,sessKey,slot){
+  const date=_predRawActiveDate();
+  const r=_setPredSlotManualResult(kind,n,date,sessKey,slot,'ZONK');
+  const msg=$id(`${kind==='v2'?'predV2SlotResultMsg_':'predSlotResultMsg_'}${sessKey}_${slot}_${n}`);
+  if(msg){msg.style.display='block';msg.textContent='💀 ZONK tersimpan';msg.style.color='var(--accent2)';}
+  if(kind==='v2')renderPredV2(n);else renderPred(n);
+}
+function _predSlotExistingResult(kind,n,dateISO,sessKey,slot){
+  const log=kind==='v2'?(predSlotLogV2[n]||[]):(predSlotLog[n]||[]);
+  const e=log.find(x=>x.dupKey===dateISO+'|'+sessKey+'|'+slot);
+  return e&&e.actualResult?e:null;
+}
+
+function renderPredRawInputPanel(kind,n){
   const v2=kind==='v2';
   const prefix=v2?'predV2RawInput_':'predRawInput_';
   const dateId=v2?'predRawDate_v2':'predRawDate_v1';
@@ -7448,7 +7546,22 @@ function renderPredRawInputPanel(kind){
     h+=`<div style="margin-top:8px"><div style="font-size:9px;color:var(--gold);margin-bottom:4px">🕐 SESI ${sess.label}</div><div style="display:flex;gap:6px;flex-wrap:wrap">`;
     for(let slot=1;slot<=sess.slots;slot++){
       const val=(draft[sess.key]&&draft[sess.key][slot])||'';
-      h+=`<div style="flex:1 1 150px;min-width:140px"><div style="font-size:7px;color:var(--dim);margin-bottom:2px">SLOT ${slot}</div><input class="letter-input" id="${prefix}${sess.key}_${slot}" maxlength="8" inputmode="numeric" placeholder="8 digit" value="${val}" style="width:100%;font-size:13px;letter-spacing:1.5px" oninput="predRawInputChanged('${kind}','${sess.key}',${slot})"></div>`;
+      const ex=_predSlotExistingResult(kind==='v2'?'v2':'v1',active,sess.key,slot);
+      const exText=ex?(ex.actualResult==='ZONK'?'💀 ZONK':(ex.isJp?'🏆 JP '+ex.actualResult:'💀 ZONK '+ex.actualResult)):'';
+      const rid=(kind==='v2'?'predV2SlotResultInp_':'predSlotResultInp_')+sess.key+'_'+slot+'_'+(kind==='v2'?'2':'1');
+      const mid=(kind==='v2'?'predV2SlotResultMsg_':'predSlotResultMsg_')+sess.key+'_'+slot+'_'+(kind==='v2'?'2':'1');
+      const rn=(kind==='v2'?'v2':'v1');
+      h+=`<div style="flex:1 1 150px;min-width:140px">
+        <div style="font-size:7px;color:var(--dim);margin-bottom:2px">SLOT ${slot}</div>
+        <input class="letter-input" id="${prefix}${sess.key}_${slot}" maxlength="8" inputmode="numeric" placeholder="8 digit" value="${val}" style="width:100%;font-size:13px;letter-spacing:1.5px" oninput="predRawInputChanged('${kind}','${sess.key}',${slot})">
+        <div style="font-size:7px;color:var(--gold);margin:5px 0 3px">RESULT ${n}H — ${kind==='v2'?'PRED V2':'PRED V1'}</div>
+        <div style="display:flex;gap:4px;align-items:stretch">
+          <input class="result-input" id="${rid}" maxlength="${n}" inputmode="text" placeholder="${'X'.repeat(n)}" style="flex:1;min-width:0;font-size:12px;padding:8px;letter-spacing:3px" oninput="this.value=this.value.toUpperCase().replace(/[^A-H]/g,'').slice(0,${n})" onkeydown="if(event.key==='Enter')submitPredSlotResult('${rn}',${n},'${sess.key}',${slot})">
+          <button class="btn-submit-result" style="padding:7px 9px;font-size:8px" onclick="submitPredSlotResult('${rn}',${n},'${sess.key}',${slot})">CEK</button>
+          <button class="btn-zonk" style="padding:7px 8px;font-size:8px" onclick="markPredSlotZonk('${rn}',${n},'${sess.key}',${slot})">ZONK</button>
+        </div>
+        <div id="${mid}" style="display:${exText?'block':'none'};font-size:7px;margin-top:3px;color:${ex&&ex.isJp?'var(--green)':'var(--accent2)'}">${exText}</div>
+      </div>`;
     }
     h+='</div></div>';
   });
@@ -7479,7 +7592,7 @@ function renderPred(n){
     ${locked&&!allDone?`<div class="locked-notice">Terkunci. Submit result aktual (<span style="color:var(--gold);font-weight:700">${resultCount}/${PRED_RESULT_LIMIT}</span> dilakukan) — generate baru terbuka setelah ${PRED_RESULT_LIMIT}x.</div>`:''}
     ${allDone?`<div class="locked-notice" style="color:var(--green);border-color:rgba(0,230,118,0.3);background:rgba(0,230,118,0.05)">✓ Limit ${PRED_RESULT_LIMIT}x tercapai. Generate baru tersedia.</div>`:''}
   </div>`;
-  html+=renderPredRawInputPanel('v1');
+  html+=renderPredRawInputPanel('v1',n);
 
   // MODE TANGGAL LAMPAU — hasil generate untuk tanggal yang sudah lewat,
   // terpisah total dari prediksi live (tidak mengunci/mengganggu apapun di atas)
@@ -7630,7 +7743,7 @@ function renderPredV2(n){
     ${locked&&!allDone?`<div class="locked-notice">Terkunci. Submit result aktual (<span style="color:var(--gold);font-weight:700">${resultCount}/${PRED_RESULT_LIMIT}</span> dilakukan) — generate baru terbuka setelah ${PRED_RESULT_LIMIT}x.</div>`:''}
     ${allDone?`<div class="locked-notice" style="color:var(--green);border-color:rgba(0,230,118,0.3);background:rgba(0,230,118,0.05)">✓ Limit ${PRED_RESULT_LIMIT}x tercapai. Generate baru tersedia.</div>`:''}
   </div>`;
-  html+=renderPredRawInputPanel('v2');
+  html+=renderPredRawInputPanel('v2',n);
 
   const bp=backdatePredV2[n];
   if(bp){
@@ -7962,6 +8075,9 @@ function submitBackdateResult(n){
     histState[n].push({date:bp.date,candidates:[...bp.candidates],result:'ZONK',jp:false,engineVersion:bp.engineVersion});
     saveHistState(n);
     _recordEngineAudit(n,'ZONK',bp,-1,false);
+    // Kalau tanggal ini sebelumnya sudah ada result valid tersimpan di pool n,
+    // tapi sekarang dikoreksi jadi ZONK, bersihkan juga entry lamanya.
+    if(removeMainPoolEntriesForDate(n,bp.date)){saveData(n,state[n]);updateMetaLearning(n);}
     backdatePred[n]=null;
     renderPred(n);if(typeof renderHariHist==="function")renderHariHist();if(typeof renderHariLengkap==="function")renderHariLengkap();renderEval(n);
     return;
@@ -7978,11 +8094,15 @@ function submitBackdateResult(n){
   saveHistState(n);
   _recordEngineAudit(n,raw,bp,hitIdx,isJp);
 
-  // Ikut masukkan ke data historis utama 2H/3H/4H, disisipkan sesuai tanggal
+  // Ikut masukkan ke data historis utama 2H/3H/4H, disisipkan sesuai tanggal.
+  // Kalau tanggal ini sudah ada entry lama di pool n yang sama, hapus dulu
+  // SUPAYA MENGGANTI, bukan menumpuk duplikat di statistik.
   undoStack[n].push(_cloneStateArr(state[n]));
   if(undoStack[n].length>10)undoStack[n].shift();
+  removeMainPoolEntriesForDate(n,bp.date);
   insertEntrySorted(state[n],{v:raw},bp.date);
   saveData(n,state[n]);
+  updateMetaLearning(n);
 
   backdatePred[n]=null;
   renderAll(n);renderPred(n);if(typeof renderHariHist==="function")renderHariHist();if(typeof renderHariLengkap==="function")renderHariLengkap();renderEval(n);renderDash();renderNotifBanner();
@@ -8039,8 +8159,10 @@ function submitResult(n){
   saveHistState(n);
   _recordEngineAudit(n,val,ps,hitIdx,isJp);
 
-  // Otomatis masukkan juga ke data utama 2H/3H/4H (riwayat keluar)
-  const isRepeatMain=vals(state[n]).includes(val);
+  // Otomatis masukkan juga ke data utama 2H/3H/4H (riwayat keluar).
+  // Kalau tanggal ini sudah ada entry lama di pool n yang sama (mis. submit
+  // ulang/koreksi), hapus dulu SUPAYA MENGGANTI, bukan menumpuk duplikat.
+  removeMainPoolEntriesForDate(n,todayISO());
   state[n].push({v:val,ts:nowTs(),putaran:vals(state[n]).length+1,d:todayISO()});
   saveData(n,state[n]);
   updateMetaLearning(n); // Layer 5: auto-calibration setelah result aktual masuk
@@ -8305,6 +8427,9 @@ function submitBackdateResultKmb(){
     histState.KMB.push({date:bp.date,candidates:[...bp.candidates],result:'ZONK',jp:false,engineVersion:bp.engineVersion});
     saveHistState('KMB');
     _recordEngineAudit('KMB','ZONK',bp,-1,false);
+    // Kalau tanggal ini sebelumnya sudah ada pola Kembar tersimpan (di tipe
+    // manapun), tapi sekarang dikoreksi jadi ZONK, bersihkan juga entry lamanya.
+    KMB_TYPES.forEach(t=>removeKembarEntriesForDate(t,bp.date));
     backdatePred.KMB=null;
     renderPredKmb();
     return;
@@ -8322,6 +8447,10 @@ function submitBackdateResultKmb(){
   saveHistState('KMB');
   _recordEngineAudit('KMB',raw,bp,hitIdx,isJp);
 
+  // Kalau tanggal ini sudah ada entry lama di tipe Kembar manapun (termasuk
+  // kalau tipe polanya berubah, mis. dulu PAIR sekarang DOUBLE), hapus dulu
+  // SUPAYA MENGGANTI, bukan menumpuk duplikat.
+  KMB_TYPES.forEach(t=>removeKembarEntriesForDate(t,bp.date));
   kmbAlignMeta(type);
   kState[type].push(raw);
   kMeta[type].push({d:bp.date,ts:nowTs()});
@@ -8380,7 +8509,10 @@ function submitResultKmb(){
   _recordEngineAudit('KMB',val,ps,hitIdx,isJp);
 
   // Otomatis masukkan juga ke pool Kembar tipe yang terdeteksi (1 sumber
-  // kebenaran dengan tab Kembar, bukan data duplikat).
+  // kebenaran dengan tab Kembar, bukan data duplikat). Kalau tanggal ini
+  // sudah ada entry lama di tipe Kembar manapun, hapus dulu SUPAYA MENGGANTI
+  // (termasuk kalau tipe polanya berubah, mis. dulu PAIR sekarang DOUBLE).
+  KMB_TYPES.forEach(t=>removeKembarEntriesForDate(t,todayISO()));
   kmbAlignMeta(type);
   kState[type].push(val);
   kMeta[type].push({d:todayISO(),ts:nowTs()});

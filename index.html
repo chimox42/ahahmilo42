@@ -2892,6 +2892,12 @@ function saveHistState(n){try{if(typeof SBData!=='undefined'){if(SBData.replaceP
 function _readLegacyV2Hist(n){
   try{const s=lsGet('tah2_histv2_'+n);if(!s)return [];const p=JSON.parse(s);return Array.isArray(p)?p:[];}catch(e){return [];}
 }
+function _readLegacyV2State(n){
+  try{const s=lsGet('tah2_predv2_'+n);if(!s)return null;const p=JSON.parse(s);return p||null;}catch(e){return null;}
+}
+function _removeLegacyV2Key(k){
+  try{localStorage.removeItem(k);delete _storeCache[k];}catch(e){}
+}
 function loadPredStateV2(n){return _defaultPredStateV2();}
 function savePredStateV2(n){
   const p=predStateV2[n]||_defaultPredStateV2();

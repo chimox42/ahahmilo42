@@ -13668,7 +13668,7 @@ async function boot(){
     state[2]=_d2;state[3]=_d3;state[4]=_d4;rawLog=_raw;
     for(const _n of [2,3,4]){const _rp=await _bootRemoteTimeout(SBData.loadPredState(_n),'PRED V1 state '+_n);predState[_n]=_rp||_defaultPredState();}
     predState.KMB=_defaultPredState();
-    const _localHistV1={2:loadHistState(2),3:loadHistState(3),4:loadHistState(4),KMB:loadHistState('KMB')};
+    const _localHistV1={2:loadHistStateV2(2),3:loadHistStateV2(3),4:loadHistStateV2(4),KMB:loadHistStateV2('KMB')};
     // PRED V1: Supabase dedicated storage is the source of truth when available.
     // If a mode has no remote rows yet, preserve existing local history and migrate it.
     for(const _n of [2,3,4,'KMB']){

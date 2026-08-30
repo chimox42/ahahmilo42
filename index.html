@@ -804,11 +804,7 @@ function candidatePretty(cand,rawDigits){
 }
 
 // Data historis DIHAPUS sesuai permintaan — mulai dari kosong, siap input ulang
-const BASE_INIT={
-  2:["HE","FA","DG","HE","AC","DE","DF","GB","EG","ED","DF","DC","BD","FA","EF","BC","HC","EG","HB","DG","FH","HE","HC","HB","AC","AE","DA","BH","DE","AE","DF","DF","DG","BF","CA","HB","AC","DF","HD","BA","DG","CF","AG","EC","BD","EB","AB","DG","DF","DH","BC","EG","FH","GE","FD","CB","CF","AB","DG","GD","CB","CD","FG","EF","HA","HG","EF","FE","CG","FG","DC","HA","FD","EG","CB","BG","BG","FB"],
-  3:["DHE","BFA","FDG","DHE","DAC","HDE","EDF","CGB","AEG","BED","CDF","ADC","CBD","GFA","BEF","DBC","GHC","FEG","CHB","CDG","EFH","FHE","EHC","GHB","HAC","BAE","BDA","GBH","HDE","HAE","GDF","EDF","EDG","ABF","FCA","DHB","GAC","BDF","FHD","HBA","CDG","BCF","HAG","BEC","GBD","GEB","DAB","CDG","CDF","GDH","ABC","HEG","BFH","HGE","EFD","ECB","GDH","HAD","EHG","DEF","DEF","DFE","CHA","EFD","BEG","FED","HAC","GBC","CFB"],
-  4:["BDHE","EBFA","AFDG","BGHE","HDAC","CHDE","CAEG","ABED","BCDF","ECBD","BHGD","BGHC","BFEG","DCHB","FCDG","AEFH","FEHC","AGHB","DHAC","GBAE","EBDA","BHDE","DHAE","AGDF","BEDG","HGAC","ADHB","GHBA","DBCF","HDAB","ACDG","EDHA","HDFE","DCHA","HEFD","CBEG","HCBD","GHAC","HGBC","HCFB"]
-};
+const BASE_INIT={2:[],3:[],4:[]};
 
 function $id(id){return document.getElementById(id);}
 function setHTML(id,html){const el=$id(id);if(el)el.innerHTML=html;}
@@ -2325,6 +2321,38 @@ const _storeCache={};
 let _storageReady=false;
 let _storagePendingWrites=0;
 
+// ============================================================
+// CLEAN START — 2026-08-30
+// User memilih mulai tracker dari NOL. Supabase sudah diverifikasi kosong,
+// sehingga legacy tracker data di browser tidak boleh dimigrasikan kembali.
+// Hanya preference/UI dan journal teknis yang dipertahankan.
+// ============================================================
+const CLEAN_START_TRACKER=true;
+const _CLEAN_START_KEEP=new Set([
+  'tah2_engine_mode','tah2_evolution_mode','tah2_last_export',
+  'tah2_auto_backup_before_restore','tah2_restore_journal','tah2_tx_journal'
+]);
+function _cleanStartTrackerLocal(){
+  if(!CLEAN_START_TRACKER)return;
+  try{
+    const keys=[];
+    for(let i=0;i<localStorage.length;i++){const k=localStorage.key(i);if(k)keys.push(k);}
+    keys.forEach(k=>{
+      const isTracker=
+        /^tah2_data_[234]$/.test(k)||
+        /^tah2_(rawlog|rawdraft|slotstate|aipred_state|aipred_hist|auditlog|rawanalisalog|engine_audit_log|jejak_pola_log|poscand_gen_log|rawlog_deleted|backfill_done)$/.test(k)||
+        /^tah2_(pred|hist|predv2|histv2)_[234](?:$)/.test(k)||
+        /^tah2_predslotlog(?:v2)?_[234]$/.test(k)||
+        k==='tah2_harianpred_gen_log'||
+        /^tah2_kembar_dates_/.test(k)||
+        /^tah_kembar_(type|meta|hist|pred)_/.test(k)||
+        k==='tah_kembar_partial'||
+        /^tah2_meta_[234]$/.test(k);
+      if(isTracker&&!_CLEAN_START_KEEP.has(k)){localStorage.removeItem(k);delete _storeCache[k];}
+    });
+  }catch(e){console.warn('[CLEAN START] local cleanup failed',e);}
+}
+
 async function _storageBootstrap(){
   // Muat semua yang ada di localStorage ke cache in-memory. Window.storage
   // (cloud) sudah diputuskan dari file ini — localStorage adalah SATU-
@@ -2732,11 +2760,10 @@ function _cloneStateArr(arr){
 // TIDAK melanjutkan (lihat blok try/catch di boot()).
 async function loadData(n){
   const rows=await SBData.loadEntries(n);
-  if(rows.length)return rows;
-  // Tabel kosong (device/akun baru) -- seed dari BASE_INIT lalu simpan.
-  const d=BASE_INIT[n].map((v,i)=>({v,ts:'AWAL',putaran:i+1}));
-  saveData(n,d);
-  return d;
+  if(Array.isArray(rows)&&rows.length)return rows;
+  // CLEAN START: akun kosong tetap benar-benar kosong. Tidak ada seed historis
+  // otomatis; data pertama hanya berasal dari input user dan disimpan ke Supabase.
+  return [];
 }
 // saveData TETAP synchronous dari sisi pemanggil (fire-and-forget, sama
 // seperti pola lsSet sebelumnya -- puluhan call site existing TIDAK perlu
@@ -2888,7 +2915,12 @@ function handleRunFullBackfill(btnId){
   }
 }
 function savePredState(n){try{if(typeof SBData!=='undefined'&&SBData.replacePredState)SBData.replacePredState(n,predState[n]).catch(e=>logTelemetryError('savePredState(Supabase)',e));}catch(e){}}
-function saveHistState(n){try{if(typeof SBData!=='undefined'){if(SBData.replacePredV1History)SBData.replacePredV1History(n,histState[n]).catch(e=>logTelemetryError('saveHistState(V1 Supabase)',e));if(SBData.replaceHistState)SBData.replaceHistState(n,histState[n]).catch(e=>logTelemetryError('saveHistState(V1 legacy Supabase)',e));}}catch(e){}}
+function saveHistState(n){try{if(typeof SBData!=='undefined'){if(SBData.replacePredV1History)SBData.replacePredV1History(n,Array.isArray(histState[n])?histState[n]:[]).catch(e=>logTelemetryError('saveHistState(V1 Supabase)',e));if(SBData.replaceHistState)SBData.replaceHistState(n,Array.isArray(histState[n])?histState[n]:[]).catch(e=>logTelemetryError('saveHistState(V1 legacy Supabase)',e));}}catch(e){}}
+// Legacy V1 history reader. Kept only for one-time migration; Supabase remains source of truth.
+function loadHistState(n){
+  try{const s=lsGet('tah2_hist_'+n);if(!s)return [];const p=JSON.parse(s);return Array.isArray(p)?p:[];}catch(e){return [];}
+}
+function _readLegacyV1Hist(n){return loadHistState(n);}
 function _readLegacyV2Hist(n){
   try{const s=lsGet('tah2_histv2_'+n);if(!s)return [];const p=JSON.parse(s);return Array.isArray(p)?p:[];}catch(e){return [];}
 }
@@ -6077,6 +6109,7 @@ function renderNotifBanner(){
 // kolom TIDAK hilang kalau halaman di-refresh sebelum result disubmit — ini
 // jadi sumber snapshot yang dicatatkan ke RIWAYAT LENGKAP saat submitHarian().
 // ============================================================
+function slotKey(sessKey,slot){return sessKey+'_'+slot;}
 const harianSlotState={};
 function loadSlotState(){try{const s=lsGet('tah2_slotstate');return s?JSON.parse(s):{};}catch(e){return{};}}
 function saveSlotState(){try{SBData.saveAppState('harian_slot_state',harianSlotState).catch(e=>logTelemetryError('saveSlotState(Supabase)',e));}catch(e){}}
@@ -13612,6 +13645,7 @@ async function boot(){
   const overlay=$id('bootOverlay');
   try{
     await _storageBootstrap();
+    _cleanStartTrackerLocal();
 
     // 2026-08-29 (permintaan user): PRED V1/V2 & Riwayat Lengkap tidak lagi
     // disimpan di localStorage (lihat savePredSlotLog/V2, saveHarianPredGenLog,
@@ -13671,16 +13705,15 @@ async function boot(){
       _bootRemoteTimeout(loadData(4),'entries 4D'),
       _bootRemoteTimeout(loadRawLog(),'raw_log')
     ]);
-    state[2]=_d2;state[3]=_d3;state[4]=_d4;rawLog=_raw;
+    state[2]=Array.isArray(_d2)?_d2:[];state[3]=Array.isArray(_d3)?_d3:[];state[4]=Array.isArray(_d4)?_d4:[];rawLog=Array.isArray(_raw)?_raw:[];
     for(const _n of [2,3,4]){const _rp=await _bootRemoteTimeout(SBData.loadPredState(_n),'PRED V1 state '+_n);predState[_n]=_rp||_defaultPredState();}
     predState.KMB=_defaultPredState();
-    const _localHistV1={2:loadHistStateV2(2),3:loadHistStateV2(3),4:loadHistStateV2(4),KMB:loadHistStateV2('KMB')};
-    // PRED V1: Supabase dedicated storage is the source of truth when available.
-    // If a mode has no remote rows yet, preserve existing local history and migrate it.
+    // CLEAN START: PRED V1 history hanya dari Supabase. Karena akun baru
+    // kosong, jangan pernah menghidupkan kembali legacy local history.
     for(const _n of [2,3,4,'KMB']){
-      const _rh=await _bootRemoteTimeout(SBData.loadPredV1History(_n),'PRED V1 history '+_n);
-      histState[_n]=_rh.length?_rh:_localHistV1[_n];
-      if(!_rh.length&&_localHistV1[_n].length)saveHistState(_n);
+      let _rh=await _bootRemoteTimeout(SBData.loadPredV1History(_n),'PRED V1 history '+_n);
+      _rh=Array.isArray(_rh)?_rh:[];
+      histState[_n]=_rh;
     }
     // BATCH 2 (2026-08-27, permintaan user: tab "PRED V2" -- clone tampilan
     // 100% identik dgn tab PRED, cuma metode skoring kandidatnya beda, lihat
@@ -13693,51 +13726,33 @@ async function boot(){
       if(_remoteState){
         predStateV2[_n]=_remoteState;
       }else{
-        const _legacyState=_readLegacyV2State(_n);
-        predStateV2[_n]=_legacyState||loadPredStateV2(_n);
-        if(_legacyState){
-          const _sr=await _bootRemoteTimeout(SBData.replacePredV2State(_n,_legacyState),'migrasi PRED V2 state '+_n);
-          if(_sr&&_sr.ok!==false)_removeLegacyV2Key('tah2_predv2_'+_n);
-        }
+        predStateV2[_n]=_defaultPredStateV2();
       }
-      const _rh=await _bootRemoteTimeout(SBData.loadPredV2History(_n),'PRED V2 history '+_n);
-      if(_rh.length){
-        histStateV2[_n]=_rh;
-        _removeLegacyV2Key('tah2_histv2_'+_n);
-      }else{
-        const _legacyHist=_readLegacyV2Hist(_n);
-        histStateV2[_n]=_legacyHist;
-        if(_legacyHist.length){
-          const _srh=await _bootRemoteTimeout(SBData.replacePredV2History(_n,_legacyHist),'migrasi PRED V2 history '+_n);
-          if(_srh&&_srh.ok!==false)_removeLegacyV2Key('tah2_histv2_'+_n);
-        }else{
-          _removeLegacyV2Key('tah2_histv2_'+_n);
-        }
-      }
+      let _rh=await _bootRemoteTimeout(SBData.loadPredV2History(_n),'PRED V2 history '+_n);
+      _rh=Array.isArray(_rh)?_rh:[];
+      histStateV2[_n]=_rh;
+      if(!_rh.length)_removeLegacyV2Key('tah2_histv2_'+_n);
     }
 
     // KEMBAR: Supabase source-of-truth. Legacy local keys are migration-only.
     let _kmbRemoteState=null;
     try{_kmbRemoteState=await _bootRemoteTimeout(SBData.loadKembarTypeState(),'KEMBAR state');}catch(eK){_kmbRemoteState=null;}
-    if(_kmbRemoteState){
-      KMB_TYPES.forEach(t=>{kPredState[t]=(_kmbRemoteState[t]&&typeof _kmbRemoteState[t]==='object')?_kmbRemoteState[t]:{};});
+    if(_kmbRemoteState&&typeof _kmbRemoteState==='object'&&!Array.isArray(_kmbRemoteState)){
+      KMB_TYPES.forEach(t=>{kPredState[t]=(_kmbRemoteState[t]&&typeof _kmbRemoteState[t]==='object'&&!Array.isArray(_kmbRemoteState[t]))?_kmbRemoteState[t]:{};});
     }else{
-      KMB_TYPES.forEach(t=>{kPredState[t]=kmbLoadPred(t);});
-      try{await _bootRemoteTimeout(SBData.replaceKembarTypeState(kPredState),'migrasi KEMBAR state');
-        KMB_TYPES.forEach(t=>{try{localStorage.removeItem('tah_kembar_pred_'+t);}catch(e){}});
-      }catch(e){}
+      KMB_TYPES.forEach(t=>{kPredState[t]={};});
     }
     for(const _t of KMB_TYPES){
       let _re=null;try{_re=await _bootRemoteTimeout(SBData.loadKembarEntries(_t),'KEMBAR entries '+_t);}catch(e){_re=null;}
-      if(_re&&Array.isArray(_re))kState[_t]=_re;else{kState[_t]=kmbLoadByType(_t);try{await _bootRemoteTimeout(SBData.replaceKembarEntries(_t,kState[_t]),'migrasi KEMBAR entries '+_t);localStorage.removeItem('tah_kembar_type_'+_t);}catch(e){}}
+      if(_re&&Array.isArray(_re))kState[_t]=_re;else kState[_t]=[];
       let _rm=null;try{_rm=await _bootRemoteTimeout(SBData.loadKembarMeta(_t),'KEMBAR meta '+_t);}catch(e){_rm=null;}
       if(_rm){kMeta[_t]=Array.isArray(_rm.meta)?_rm.meta:[];if(_rm.dates&&Array.isArray(_rm.dates)&&!kMeta[_t].length)kMeta[_t]=_rm.dates;}
-      else{kMeta[_t]=kmbLoadMeta(_t);try{await _bootRemoteTimeout(SBData.replaceKembarMeta(_t,{meta:kMeta[_t],dates:_rm&&_rm.dates?_rm.dates:[]}),'migrasi KEMBAR meta '+_t);localStorage.removeItem('tah_kembar_meta_'+_t);}catch(e){}}
+      else kMeta[_t]=[];
       kmbAlignMeta(_t);
       let _rh=[];try{_rh=await _bootRemoteTimeout(SBData.loadKembarTypeHist(_t),'KEMBAR history '+_t);}catch(e){_rh=[];}
-      if(_rh.length)kHistState[_t]=_rh;else{kHistState[_t]=kmbLoadHist(_t);if(kHistState[_t].length)try{await _bootRemoteTimeout(SBData.replaceKembarTypeHist(_t,kHistState[_t]),'migrasi KEMBAR history '+_t);localStorage.removeItem('tah_kembar_hist_'+_t);}catch(e){}}
+      if(_rh.length)kHistState[_t]=_rh;else kHistState[_t]=[];
     }
-    try{const _rp=await _bootRemoteTimeout(SBData.loadKembarPartialLog(),'KEMBAR partial');if(_rp.length)kPartialLog=_rp;else{kPartialLog=kmbLoadPartialLog();if(kPartialLog.length)try{await _bootRemoteTimeout(SBData.replaceKembarPartialLog(kPartialLog),'migrasi KEMBAR partial');localStorage.removeItem('tah_kembar_partial');}catch(e){}}}catch(e){kPartialLog=[];}
+    try{const _rp=await _bootRemoteTimeout(SBData.loadKembarPartialLog(),'KEMBAR partial');kPartialLog=Array.isArray(_rp)?_rp:[];}catch(e){kPartialLog=[];}
     rawLogDeleted=await _hydrateAppState('raw_log_deleted','tah2_rawlog_deleted',x=>JSON.parse(x),[]);
     migrateUnclassifiedToPartial();
     rawDraft=await _hydrateAppState('rawdraft','tah2_rawdraft',x=>JSON.parse(x),null);
@@ -13758,9 +13773,9 @@ async function boot(){
         SBData.loadPredSlotLogRemote(2),SBData.loadPredSlotLogRemote(3),SBData.loadPredSlotLogRemote(4),
         SBData.loadPredSlotLogV2Remote(2),SBData.loadPredSlotLogV2Remote(3),SBData.loadPredSlotLogV2Remote(4)
       ]);
-      harianPredGenLog=_hpg;
-      predSlotLog[2]=_ps2;predSlotLog[3]=_ps3;predSlotLog[4]=_ps4;
-      predSlotLogV2[2]=_psv2_2;predSlotLogV2[3]=_psv2_3;predSlotLogV2[4]=_psv2_4;
+      harianPredGenLog=Array.isArray(_hpg)?_hpg:[];
+      predSlotLog[2]=Array.isArray(_ps2)?_ps2:[];predSlotLog[3]=Array.isArray(_ps3)?_ps3:[];predSlotLog[4]=Array.isArray(_ps4)?_ps4:[];
+      predSlotLogV2[2]=Array.isArray(_psv2_2)?_psv2_2:[];predSlotLogV2[3]=Array.isArray(_psv2_3)?_psv2_3:[];predSlotLogV2[4]=Array.isArray(_psv2_4)?_psv2_4:[];
     }catch(eRemoteHist){
       // Supabase gagal/offline -- jangan sampai boot mati total, tapi jangan
       // diam2 pakai data lokal lama juga (sesuai permintaan: tidak ada lagi
@@ -13793,11 +13808,16 @@ async function boot(){
       captureInsightSnapshot();
     }catch(eAutoSync){}
 
-    renderAll(2);renderAll(3);renderAll(4);
-    renderNotifBanner();
-    renderDash();
-    initSections();
-    setTimeout(()=>{renderChart(2);renderChart(3);renderChart(4);},120);
+    // BOOT SAFETY: rendering/UI errors must never masquerade as a storage/Supabase
+    // failure. Each renderer is isolated so one unexpected data shape cannot abort boot.
+    const _bootSafe=(label,fn)=>{try{return fn();}catch(err){logTelemetryError('boot/render '+label,err);console.warn('[BOOT SAFE]',label,err);return null;}};
+    _bootSafe('renderAll 2H',()=>renderAll(2));
+    _bootSafe('renderAll 3H',()=>renderAll(3));
+    _bootSafe('renderAll 4H',()=>renderAll(4));
+    _bootSafe('renderNotifBanner',()=>renderNotifBanner());
+    _bootSafe('renderDash',()=>renderDash());
+    _bootSafe('initSections',()=>initSections());
+    setTimeout(()=>{_bootSafe('renderChart 2H',()=>renderChart(2));_bootSafe('renderChart 3H',()=>renderChart(3));_bootSafe('renderChart 4H',()=>renderChart(4));},120);
     // BUGFIX: pastikan tab RIWAYAT HARIAN / RIWAYAT LENGKAP langsung
     // menampilkan histori (termasuk hasil restore _seedFromBackupIfEmpty()
     // di atas) tanpa perlu pengguna refresh/pindah tab dulu.

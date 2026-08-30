@@ -2751,6 +2751,16 @@ function loadSecState(id){
 }
 function saveSecState(id,open){try{lsSet('tah2_sec_'+id,open?'1':'0');}catch(e){}}
 
+// Default state guards — wajib didefinisikan sebelum boot/hydration memakai
+// Supabase. Ini hanya fallback RAM ketika belum ada state remote; tidak
+// mengubah engine/scoring.
+function _defaultPredState(){
+  return {date:null,candidates:[],candidateSources:[],status:[],result:null,results:[],engineVersion:getEngineMode()};
+}
+function _defaultPredStateV2(){
+  return {date:null,candidates:[],candidateSources:[],status:[],result:null,results:[],engineVersion:'batch2'};
+}
+
 // Prediksi aktif (generate harian, 11 kandidat) — terpisah dari data utama
 function loadPredState(n){if(typeof predState!=='undefined'&&predState[n])return predState[n];return _defaultPredState();}
 const PRED_RESULT_LIMIT=10;

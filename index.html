@@ -1932,6 +1932,34 @@ function renderHarianLog(){
     const origIdx=rawLog.indexOf(r);
     const canJejak=r.raw&&r.raw.length===8&&r.result&&r.result!=='ZONK';
     const jejakBtn=canJejak?`<button onclick="toggleJejakPola(${origIdx})" style="background:none;border:1px solid var(--dim2);color:var(--purple);font-size:7px;letter-spacing:0.5px;border-radius:4px;padding:1px 5px;cursor:pointer;flex-shrink:0" title="Analisa raw & result vs kandidat engine">▸ Jejak Pola</button>`:'';
+    // 2026-08-30 (permintaan user): tampilkan kecocokan KANDIDAT PREDIKSI
+    // ENGINE (bukan cuma raw mentah) vs result -- ditarik dari harianPredGenLog
+    // (candidateHitAudit, dihitung saat result disimpan, lihat _recordPosMatchAudit
+    // / _computeCandidateHitAudit). Dicari lewat dupKey yg sama persis dgn yg
+    // dipakai _logHarianPredGen (tanggal|sessKey|slot|raw).
+    let candLine='';
+    if(canJejak){
+      const sessKeyForGen=(HARIAN_SESSIONS.find(s=>s.label===r.session)||{}).key;
+      const genEntry=sessKeyForGen?harianPredGenLog.find(e=>e.dupKey===(r.date+'|'+sessKeyForGen+'|'+r.slot+'|'+r.raw)):null;
+      const cha=genEntry&&genEntry.candidateHitAudit;
+      if(cha){
+        const isKmb=cha.kmbRank!=null||cha.kmbType;
+        let label;
+        if(isKmb){
+          label=`KEMBAR=${cha.kmbRank?'rank #'+cha.kmbRank+' ('+(cha.kmbSource||'core')+')':'meleset'}`;
+        }else{
+          const parts=[];
+          if(r.result.length===4)parts.push(`4D=${cha.cand4Rank?'rank #'+cha.cand4Rank+' ('+(cha.cand4Source||'core')+')':'meleset'}`);
+          if(r.result.length===3)parts.push(`3D=${cha.cand3Rank?'rank #'+cha.cand3Rank+' ('+(cha.cand3Source||'core')+')':'meleset'}`);
+          if(r.result.length===2)parts.push(`2D=${cha.cand2Rank?'rank #'+cha.cand2Rank+' ('+(cha.cand2Source||'core')+')':'meleset'}`);
+          label=parts.join(' · ')||'-';
+        }
+        const anyHit=cha.cand4Rank||cha.cand3Rank||cha.cand2Rank||cha.kmbRank;
+        candLine=`<div style="font-size:8px;margin-top:3px;color:${anyHit?'var(--green)':'var(--red)'}">🎯 Kandidat Engine: ${label}</div>`;
+      }else{
+        candLine=`<div style="font-size:8px;margin-top:3px;color:var(--dim)">🎯 Kandidat Engine: belum ada data (entri lama — pakai "Perbaiki entri lama")</div>`;
+      }
+    }
     return `<div style="display:flex;flex-direction:column;gap:2px;font-size:9px;padding:6px 8px;background:var(--panel2);border-radius:6px;margin-bottom:4px;border-left:3px solid ${color}">
       <div style="display:flex;justify-content:space-between;gap:6px;overflow-x:auto">
         <span style="color:var(--dim);white-space:nowrap">${r.ts} · ${r.session} · slot${r.slot||1}</span>
@@ -1943,6 +1971,7 @@ function renderHarianLog(){
       </div>
       ${traceLine}
       ${zonkReasonLine}
+      ${candLine}
       ${jejakBtn?`<div style="margin-top:2px">${jejakBtn}</div><div id="jejakPola_${origIdx}" style="display:none;background:var(--panel);border-radius:6px;margin-top:2px"></div>`:''}
     </div>`;
   }).join('');
@@ -2097,7 +2126,7 @@ function submitHarian(){
       if(raw&&raw.length===8){
         const slotSt=harianSlotState[slotKey(sess.key,slot)];
         if(slotSt&&slotSt.raw===raw){
-          if(slotSt.pred)predSnapshot={cand4:(slotSt.pred.cand4||[]).slice(0,10),cand3:(slotSt.pred.cand3||[]).slice(0,10),cand2:(slotSt.pred.cand2||[]).slice(0,10),kembar:(slotSt.pred.kembar||[]).slice(0,12)};
+          if(slotSt.pred)predSnapshot={cand4:(slotSt.pred.cand4||[]).slice(0,15),cand3:(slotSt.pred.cand3||[]).slice(0,15),cand2:(slotSt.pred.cand2||[]).slice(0,15),kembar:(slotSt.pred.kembar||[]).slice(0,15)};
           if(slotSt.ai)aiSnapshot={text:slotSt.ai.text,ts:slotSt.ai.ts};
         }
       }
@@ -2107,8 +2136,15 @@ function submitHarian(){
       // harianPredGenLog saat raw diketik) vs posisi aktual (resultTrace di
       // atas) -- HANYA kalau raw-nya genap 8 digit (posisi 1-8 baru valid
       // dianalisa dgn raw lengkap).
-      if(raw&&raw.length===8&&resultTrace&&resultTrace.length){
-        _recordPosMatchAudit(dateISO,sess.key,slot,raw,resultVal,resultTrace,resultRaw&&resultRaw!=='ZONK'?resultRaw:null);
+      // 2026-08-30 (bugfix, permintaan user): syarat dipanggilnya fungsi ini
+      // DILONGGARKAN dari "harus ada resultTrace" jadi "asal ada resultVal" --
+      // supaya result yg diketik MANUAL sbg huruf (bukan hasil derive dari
+      // angka, makanya resultTrace-nya null) tetap kebagian candidateHitAudit
+      // (audit kandidat vs result). Di dalam _recordPosMatchAudit sendiri,
+      // bagian posMatchAudit (analisa POSISI) tetap correctly di-skip kalau
+      // resultTrace kosong -- cuma candidateHitAudit yg sekarang selalu jalan.
+      if(raw&&raw.length===8&&resultVal){
+        _recordPosMatchAudit(dateISO,sess.key,slot,raw,resultVal,resultTrace||null,resultRaw&&resultRaw!=='ZONK'?resultRaw:null);
       }
       // Isi otomatis predSlotLog (mesin PRED sendiri) dgn result asli --
       // TIDAK perlu user re-ketik manual lagi ke kotak "MASUKKAN RESULT
@@ -2144,6 +2180,10 @@ function submitHarian(){
   // ini (lihat guard di dalam generatePred/generatePredKmb).
   [2,3,4].forEach(n=>{try{generatePred(n,true);}catch(e){}});
   try{generatePredKmb(true);}catch(e){}
+  // 2026-08-30 (permintaan user): sinkronkan histState(V2) dari predSlotLog(V2)
+  // -- gantikan peran submitResult(V2) manual yg tombolnya sudah dihapus dari
+  // tampilan PRED (tampilan PRED sekarang gaya Harian, auto). Idempoten.
+  [2,3,4].forEach(n=>{try{_syncHistStateFromSlotLog(n);}catch(e){}try{_syncHistStateFromSlotLogV2(n);}catch(e){}});
   // Auto-trigger 2026-08: cek apakah kasus tervalidasi baru sudah cukup
   // (>=AUTO_AUDIT_NEW_CASES_THRESHOLD) utk memicu Audit Oracle sendiri --
   // fire-and-forget, tidak menahan render/alur submit di bawah ini.
@@ -4221,8 +4261,32 @@ function candidateDigitsFromRaw(cand,rawDigits){
 // vs provenance+penalaran Oracle). Kalau kandidat yang SAMA muncul di
 // keduanya, itu sinyal lebih kuat (dua sudut pandang beda sepakat),
 // jadi ditandai khusus di kedua tab.
+// 2026-08-30 (permintaan user): predState[n].candidates/predStateV2[n].candidates
+// TIDAK diisi lagi lewat tombol GENERATE manual (dihapus dari tampilan) --
+// supaya badge "🤝 KONSENSUS" di tab AI PRED tetap hidup, kandidat pembanding
+// sekarang diambil dari entry predSlotLog(V2)[n] TERBARU hari ini (sistem
+// baru, otomatis terisi dari raw yang diketik). predState[n].candidates lama
+// tetap dipakai sbg fallback kalau belum ada data slot sama sekali.
+function _latestSlotLogCandidates(n){
+  try{
+    if(!predSlotLog[n])predSlotLog[n]=loadPredSlotLog(n);
+    const all=predSlotLog[n];
+    if(!all||!all.length)return null;
+    const sorted=[...all].sort((a,b)=>(b.dateISO+b.sessKey+b.slot).localeCompare(a.dateISO+a.sessKey+a.slot));
+    return sorted[0].candidates||null;
+  }catch(e){return null;}
+}
+function _latestSlotLogCandidatesV2(n){
+  try{
+    if(!predSlotLogV2[n])predSlotLogV2[n]=loadPredSlotLogV2(n);
+    const all=predSlotLogV2[n];
+    if(!all||!all.length)return null;
+    const sorted=[...all].sort((a,b)=>(b.dateISO+b.sessKey+b.slot).localeCompare(a.dateISO+a.sessKey+a.slot));
+    return sorted[0].candidates||null;
+  }catch(e){return null;}
+}
 function getConsensusSet(n){
-  const predList=(predState&&predState[n]&&predState[n].candidates)||[];
+  const predList=_latestSlotLogCandidates(n)||(predState&&predState[n]&&predState[n].candidates)||[];
   const aiList=((aiPredState&&aiPredState['cand'+n])||[]).map(c=>c.combo);
   const predSet=new Set(predList);
   const aiSet=new Set(aiList);
@@ -4230,7 +4294,7 @@ function getConsensusSet(n){
   return{overlap,overlapSet:new Set(overlap),predCount:predSet.size,aiCount:aiSet.size};
 }
 function getConsensusSetV2(n){
-  const predList=(predStateV2&&predStateV2[n]&&predStateV2[n].candidates)||[];
+  const predList=_latestSlotLogCandidatesV2(n)||(predStateV2&&predStateV2[n]&&predStateV2[n].candidates)||[];
   const aiList=((aiPredState&&aiPredState['cand'+n])||[]).map(c=>c.combo);
   const predSet=new Set(predList);
   const aiSet=new Set(aiList);
@@ -7643,16 +7707,23 @@ function renderPredRawInputPanel(kind,n){
   const dateId=v2?'predRawDate_v2':'predRawDate_v1';
   const active=_predRawActiveDate();
   const draft=(rawDraft&&rawDraft.date===active&&rawDraft.vals)?rawDraft.vals:{};
-  let h=`<div class="gen-box" style="border-color:${v2?'#7ee787':'var(--green)'};background:rgba(0,230,118,.035)">
-    <div class="uni-title" style="color:${v2?'#7ee787':'var(--green)'}">🔢 INPUT RAW DATA — ${v2?'PRED V2':'PRED V1'}</div>
-    <div class="uni-sub">RAW master yang sama dengan tab HARIAN. Isi 8 digit per kolom; begitu lengkap, engine ${v2?'V2':'V1'} langsung menghitung & menampilkan kandidat 2H/3H/4H di bawah kolom RAW-nya sendiri. Tidak perlu menunggu slot lain. Kolom RESULT cukup diisi <b style="color:var(--gold)">1x</b> (2-4 <b style="color:var(--gold)">digit</b>, hasil terpanjang yang kamu tahu — tidak perlu convert ke huruf manual, sistem yang urus sendiri pakai RAW slot ini) — otomatis cascade turun jadi cek 3H & 2H juga, berlaku sekaligus untuk 2H/3H/4H, tidak perlu pindah tab dan ketik ulang.</div>
-    <div class="uni-date-row" style="margin:8px 0">
-      <label class="uni-date-label" for="${dateId}">📅 Tanggal RAW</label>
-      <input type="date" class="uni-date-input" id="${dateId}" value="${active}" max="${todayISO()}" oninput="predRawDateChanged()">
-      <span class="uni-date-hint">${active<todayISO()?'⏪ tanggal lampau':''}</span>
-    </div>`;
+  const accent=v2?'#7ee787':'var(--green)';
+  // 2026-08-30 (permintaan user, ACC): markup baris sesi/slot DIGANTI supaya
+  // visualnya IDENTIK dengan tab HARIAN (renderHarian) -- class harian-row/
+  // letter-input harian-raw/harian-result/btn-io dipakai APA ADANYA, raw &
+  // result sejajar horizontal 1 baris per slot (sebelumnya raw di atas,
+  // result di bawah, terpisah kolom). Engine/fungsi submit TIDAK berubah
+  // (predRawInputChanged/submitPredSlotResultCascade(Zonk) tetap sama).
+  let h=`<div class="uni-title" style="text-align:center;margin:6px 0 4px;color:${accent}">🔢 INPUT RAW DATA — ${v2?'PRED V2':'PRED V1'}</div>
+  <div class="uni-sub" style="text-align:center">RAW master yang sama dengan tab HARIAN. Isi 8 digit per kolom; begitu lengkap, engine ${v2?'V2':'V1'} langsung menghitung & menampilkan kandidat 2H/3H/4H di bawahnya. Kolom RESULT cukup diisi <b style="color:var(--gold)">1x</b> (2-4 digit, hasil terpanjang yang kamu tahu) — otomatis cascade turun cek 3H & 2H juga.</div>
+  <div class="uni-date-row" style="margin:10px 0">
+    <label class="uni-date-label" for="${dateId}">📅 Tanggal RAW</label>
+    <input type="date" class="uni-date-input" id="${dateId}" value="${active}" max="${todayISO()}" oninput="predRawDateChanged()">
+    <span class="uni-date-hint">${active<todayISO()?'⏪ tanggal lampau':''}</span>
+  </div>`;
   HARIAN_SESSIONS.forEach(sess=>{
-    h+=`<div style="margin-top:8px"><div style="font-size:9px;color:var(--gold);margin-bottom:4px">🕐 SESI ${sess.label}</div><div style="display:flex;gap:6px;flex-wrap:wrap">`;
+    h+=`<div class="input-section" style="margin-bottom:12px">
+      <div class="input-title" style="color:${accent}">🕐 SESI ${sess.label} ${sess.slots>1?`(${sess.slots}× result)`:'(1× result)'}</div>`;
     for(let slot=1;slot<=sess.slots;slot++){
       const val=(draft[sess.key]&&draft[sess.key][slot])||'';
       const ex2=_predSlotExistingResult(kind==='v2'?'v2':'v1',2,active,sess.key,slot);
@@ -7664,22 +7735,21 @@ function renderPredRawInputPanel(kind,n){
       const mid=(kind==='v2'?'predV2SlotResultMsg_':'predSlotResultMsg_')+sess.key+'_'+slot;
       const rn=(kind==='v2'?'v2':'v1');
       const cid=(kind==='v2'?'predV2SlotCandPrev_':'predSlotCandPrev_')+sess.key+'_'+slot;
-      h+=`<div style="flex:1 1 150px;min-width:140px">
-        <div style="font-size:7px;color:var(--dim);margin-bottom:2px">SLOT ${slot}</div>
-        <input class="letter-input" id="${prefix}${sess.key}_${slot}" maxlength="8" inputmode="numeric" placeholder="8 digit" value="${val}" style="width:100%;font-size:13px;letter-spacing:1.5px" oninput="predRawInputChanged('${kind}','${sess.key}',${slot})">
-        <div id="${cid}">${val&&val.length===8?_predRawCandidatesPreview(kind,active,val):''}</div>
-        <div style="font-size:7px;color:var(--gold);margin:5px 0 3px">RESULT (2-4 digit, cascade) — ${kind==='v2'?'PRED V2':'PRED V1'}</div>
-        <div style="display:flex;gap:4px;align-items:stretch">
-          <input class="result-input" id="${rid}" maxlength="4" inputmode="numeric" placeholder="digit" style="flex:1;min-width:0;font-size:12px;padding:8px;letter-spacing:3px" oninput="this.value=this.value.toUpperCase().replace(/[^0-9]/g,'').slice(0,4)" onkeydown="if(event.key==='Enter')submitPredSlotResultCascade('${rn}','${sess.key}',${slot})">
-          <button class="btn-submit-result" style="padding:7px 9px;font-size:8px" onclick="submitPredSlotResultCascade('${rn}','${sess.key}',${slot})">CEK</button>
-          <button class="btn-zonk" style="padding:7px 8px;font-size:8px" onclick="submitPredSlotResultCascadeZonk('${rn}','${sess.key}',${slot})">ZONK</button>
+      h+=`<div class="harian-row" style="display:flex;gap:6px;margin-bottom:4px;align-items:center;overflow-x:auto;-webkit-overflow-scrolling:touch;scrollbar-width:thin;padding-bottom:2px">
+        <input class="letter-input harian-raw" id="${prefix}${sess.key}_${slot}" maxlength="8" inputmode="numeric" placeholder="8 digit mentah" value="${val}" style="flex:1 1 160px;min-width:160px;font-size:13px;letter-spacing:1.5px" oninput="predRawInputChanged('${kind}','${sess.key}',${slot})">
+        <div style="display:flex;gap:4px;flex:1 1 150px;min-width:150px;align-items:center">
+          <input class="letter-input harian-result" id="${rid}" maxlength="4" inputmode="numeric" placeholder="ANGKA (2483)" style="flex:1 1 90px;min-width:80px;font-size:14px;letter-spacing:2px" oninput="this.value=this.value.replace(/[^0-9]/g,'').slice(0,4)" onkeydown="if(event.key==='Enter')submitPredSlotResultCascade('${rn}','${sess.key}',${slot})">
+          <button type="button" class="btn-io" style="font-size:9px;padding:6px 7px;flex:0 0 auto" onclick="submitPredSlotResultCascade('${rn}','${sess.key}',${slot})" title="Cek result">CEK</button>
+          <button type="button" class="btn-io" style="font-size:9px;padding:6px 7px;flex:0 0 auto;color:var(--red);border-color:var(--red)" onclick="submitPredSlotResultCascadeZonk('${rn}','${sess.key}',${slot})">ZONK</button>
         </div>
-        <div id="${mid}" style="display:${exText?'block':'none'};font-size:7px;margin-top:3px;color:${exParts.some(p=>p.includes('🏆'))?'var(--green)':'var(--accent2)'}">${exText}</div>
-      </div>`;
+      </div>
+      <div style="font-size:7px;color:var(--dim);margin:0 0 4px 2px">SLOT ${slot}${exText?' · <span style="color:'+(exParts.some(p=>p.includes('🏆'))?'var(--green)':'var(--accent2)')+'">'+exText+'</span>':''}</div>
+      <div id="${cid}" style="margin-bottom:6px">${val&&val.length===8?_predRawCandidatesPreview(kind,active,val):''}</div>
+      <div id="${mid}" style="display:none"></div>`;
     }
-    h+='</div></div>';
+    h+=`<div style="font-size:8px;color:var(--purple);margin-bottom:2px">⟷ geser kalau terpotong · slot 1 & slot 2 saling terhubung sebagai bahan cocok-angka</div></div>`;
   });
-  h+=`<div style="font-size:7px;color:var(--dim);margin-top:7px">RAW tersimpan sebagai draft bersama. Saat result resmi masuk di HARIAN, evaluasi tetap menggunakan tanggal + sesi + slot yang sama.</div></div>`;
+  h+=`<div style="font-size:7px;color:var(--dim);margin-top:2px;margin-bottom:10px">RAW tersimpan sebagai draft bersama. Saat result resmi masuk di HARIAN, evaluasi tetap menggunakan tanggal + sesi + slot yang sama.</div>`;
   return h;
 }
 function submitPredSlotResultCascadeZonk(kind,sessKey,slot){
@@ -7689,140 +7759,23 @@ function submitPredSlotResultCascadeZonk(kind,sessKey,slot){
 }
 
 function renderPred(n){
-  const today=todayStr();
-  const ps=predState[n];
-  if(!ps.results)ps.results=[];
-  const resultCount=ps.results.length;
-  const locked=ps.date===today&&ps.candidates.length>0&&resultCount<PRED_RESULT_LIMIT;
-  const allDone=resultCount>=PRED_RESULT_LIMIT;
+  // 2026-08-30 (permintaan user, ACC): tampilan diganti total ke gaya
+  // Harian -- gen-box lama (date-picker+GENERATE+lock), mode backdate,
+  // daftar "15 KANDIDAT" manual, riwayat result manual, dan kotak
+  // "MASUKKAN RESULT AKTUAL" manual SEMUA DIHAPUS dari sini (fungsinya di
+  // kode -- generatePred/submitResult/backdate dkk -- TIDAK dihapus fisik,
+  // cuma tidak dipanggil lagi dari render, biar reversibel). Yang tersisa
+  // di bawah SUDAH gaya Harian sepenuhnya: renderPredRawInputPanel (raw +
+  // result cascade per sesi/slot, live) + PRED PER-SLOT (kartu per
+  // sesi/slot, auto, tanpa generate manual). Engine TIDAK berubah, tetap
+  // _computePredSlotCandidatesAsOf (PRED V1).
+  _syncHistStateFromSlotLog(n);
   const cc='c'+n;
   let html='';
-
-  html+=`<div class="gen-box">
-    <div class="uni-date-row" style="margin-bottom:10px">
-      <label class="uni-date-label" for="predDate${n}">📅 Tanggal prediksi</label>
-      <input type="date" class="uni-date-input" id="predDate${n}" value="${todayISO()}" max="${todayISO()}" oninput="predDateChanged(${n})">
-      <span class="uni-date-hint" id="predDateHint${n}"></span>
-    </div>
-    <button class="btn-generate" id="btnGen${n}" onclick="handleGeneratePred(${n})" ${locked?'disabled':''}>
-      ${locked?`✓ PREDIKSI TERKUNCI`:'⚡ GENERATE PREDIKSI (15 KANDIDAT)'}
-    </button>
-    <button class="btn btn-undo" id="btnBackfill${n}" style="width:100%;margin-top:8px;font-size:9px;border-color:var(--gold);color:var(--gold)" onclick="handleRunFullBackfill('btnBackfill${n}')">🗂️ BACKFILL SEMUA DATA LAMPAU (2H/3H/4H/KMB)</button>
-    ${locked&&!allDone?`<div class="locked-notice">Terkunci. Submit result aktual (<span style="color:var(--gold);font-weight:700">${resultCount}/${PRED_RESULT_LIMIT}</span> dilakukan) — generate baru terbuka setelah ${PRED_RESULT_LIMIT}x.</div>`:''}
-    ${allDone?`<div class="locked-notice" style="color:var(--green);border-color:rgba(0,230,118,0.3);background:rgba(0,230,118,0.05)">✓ Limit ${PRED_RESULT_LIMIT}x tercapai. Generate baru tersedia.</div>`:''}
-  </div>`;
+  html+=`<button class="btn btn-undo" id="btnBackfill${n}" style="width:100%;margin-bottom:10px;font-size:9px;border-color:var(--gold);color:var(--gold)" onclick="handleRunFullBackfill('btnBackfill${n}')">🗂️ BACKFILL SEMUA DATA LAMPAU (2H/3H/4H/KMB)</button>`;
   html+=renderPredRawInputPanel('v1',n);
-
-  // MODE TANGGAL LAMPAU — hasil generate untuk tanggal yang sudah lewat,
-  // terpisah total dari prediksi live (tidak mengunci/mengganggu apapun di atas)
-  const bp=backdatePred[n];
-  if(bp){
-    html+=`<div class="gen-box" style="border-color:var(--gold);background:rgba(255,193,7,0.06)">
-      <div class="gen-date">📅 PREDIKSI TANGGAL LAMPAU: <span>${isoToDisplay(bp.date)}</span></div>
-      <div style="font-family:'Orbitron',monospace;font-size:8px;letter-spacing:3px;color:var(--gold);margin:8px 0">${bp.candidates.length} KANDIDAT (untuk ${isoToDisplay(bp.date)}) — hasil analisa data historis (V2/V3 engine), bukan acak</div>
-      <div class="pred-list">${bp.candidates.map((cand,i)=>`<div class="pred-item"><span class="pred-rank">#${i+1}</span><span class="pred-cand cand ${cc}">${cand}</span>${_srcBadgeHtml(bp.candidateSources&&bp.candidateSources[i])}<span class="badge-pending">MENUNGGU RESULT</span></div>`).join('')}</div>
-      <div style="font-size:8px;color:var(--purple);text-align:center;margin:6px 0">Mau analisa mendalam soal kandidat ini? Buka tab 🔮 ORACLE → tap "🎯 ANALISA SEMUA PREDIKSI AKTIF"</div>
-      <div class="result-box" style="margin-top:10px">
-        <div class="result-title">✦ MASUKKAN RESULT AKTUAL UNTUK ${isoToDisplay(bp.date)}</div>
-        ${bp.suggestedResults&&bp.suggestedResults.length?`<div style="font-size:8px;color:var(--gold);margin-bottom:6px">📌 Ditemukan ${bp.suggestedResults.length} entri result aktual di data historis tanggal ini — tap yang sesuai:</div>
-        <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px">${bp.suggestedResults.map(e=>`<button class="btn btn-undo" style="padding:5px 10px;font-size:11px;border-color:var(--gold);color:var(--gold);display:flex;flex-direction:column;align-items:center;line-height:1.3" onclick="_autoRecordBackdateResult(${n},'${e.v}')"><span>${e.v}</span><span style="font-size:7px;color:var(--dim)">${e.session||''}${e.slot?' · slot'+e.slot:''}</span></button>`).join('')}</div>`:''}
-        <div class="result-input-row">
-          <input class="result-input" id="backdateResInp${n}" maxlength="${n}" placeholder="${'X'.repeat(n)} atau ZONK" oninput="this.value=this.value.toUpperCase().replace(/[^A-Z]/g,'')" onkeydown="if(event.key==='Enter')submitBackdateResult(${n})">
-          <button class="btn-submit-result" onclick="submitBackdateResult(${n})">SIMPAN</button>
-        </div>
-        <div style="font-size:8px;color:var(--dim);margin-top:6px">Tulis ZONK kalau tidak ada kandidat yang cocok — tetap tercatat sebagai riwayat, tidak masuk data historis.</div>
-        <button class="btn btn-undo" style="margin-top:8px;width:100%" onclick="cancelBackdatePred(${n})">✕ Batalkan</button>
-        <div class="result-msg" id="backdateResMsg${n}"></div>
-      </div>
-    </div>`;
-  }
-
-  // ============================================================
-  // PRED PER-SLOT RAW (2026-08-25, permintaan user) — di luar predState[n]
-  // lama (1 set/hari, murni pola historis, TETAP dipertahankan apa adanya
-  // di blok bawah ini). Blok ini SURFACE ULANG data yg sebetulnya SUDAH
-  // ada & sudah tersimpan permanen (predSnapshot per rawLog entry,
-  // dihitung raw-digit-aware lewat computeSlotPredLocal saat HARIAN
-  // disubmit, sudah ikut sync ke Supabase lewat raw_log) -- sebelumnya
-  // cuma tampil di tab HISTORI KANDIDAT/RIWAYAT LENGKAP, sekarang JUGA di
-  // sini. Dinamis: sejumlah raw yg benar2 ada hari ini (1 atau 2 slot per
-  // sesi, ikut apa adanya, tidak dipaksa 2).
-  // ============================================================
   html+=_renderPredPerSlotToday(n,cc);
   html+=_renderPredPerSlotFullHistory(n,cc);
-
-  if(ps.candidates.length>0){
-    const lastResult=ps.results.length?ps.results[ps.results.length-1]:null;
-    let comboLookup={};
-    try{scoreCandidatesCombined(n,ALL[n].length).forEach(c=>{comboLookup[c.cand]=c;});}catch(e){}
-    const draftToday=(rawDraft&&rawDraft.date===todayISO())?rawDraft.vals:null;
-    const consensus=getConsensusSet(n);
-    html+=`<div style="font-family:'Orbitron',monospace;font-size:8px;letter-spacing:3px;color:var(--gold);margin-bottom:8px">15 KANDIDAT PREDIKSI (V2+V3 sekaligus) — hasil analisa data historis, bukan acak</div>`;
-    if(draftToday){
-      html+=`<div style="font-size:8px;color:var(--green);margin-bottom:6px">🔢 Data mentah hari ini sudah masuk — kandidat di bawah dicocokkan ke digit mentahnya (per slot), jadi bukan tebakan buta.</div>`;
-    }
-    if(consensus.aiCount>0){
-      html+=`<div style="font-size:8px;color:var(--gold);margin-bottom:6px">🤝 ${consensus.overlap.length} dari ${consensus.aiCount} kandidat AI PRED juga nongol di sini — ditandai border emas (konsensus dua metode independen).</div>`;
-    }
-    html+='<div class="pred-list">';
-    ps.candidates.forEach((cand,i)=>{
-      const st=lastResult?(lastResult.isJp&&ps.candidates[lastResult.hitIdx]===cand?'jp':lastResult.val===cand?'jp':ps.status[i]||'pending'):ps.status[i]||'pending';
-      const isJp=ps.status[i]==='jp',isZonk=ps.status[i]==='zonk';
-      const isConsensus=consensus.overlapSet.has(cand);
-      const sc=comboLookup[cand];
-      const scoreLine=sc?`<span style="font-size:8px;color:var(--dim);margin-left:4px">V2 ${sc.v2.toFixed(0)} · V3 ${sc.v3.toFixed(0)}</span>`:'';
-      let rawLine='';
-      if(draftToday){
-        const proj=[];
-        HARIAN_SESSIONS.forEach(sess=>{
-          for(let slot=1;slot<=sess.slots;slot++){
-            const rd=draftToday[sess.key]&&draftToday[sess.key][slot];
-            if(rd&&rd.length===8){
-              const digits=candidateDigitsFromRaw(cand,rd);
-              if(digits)proj.push(`${sess.label}·S${slot}→${digits}`);
-            }
-          }
-        });
-        if(proj.length)rawLine=`<div style="font-size:8px;color:var(--purple);margin-top:2px">${proj.join(' · ')}</div>`;
-      }
-      html+=`<div class="pred-item ${isJp?'jp':isZonk?'zonk':''}${isConsensus?' consensus':''}" style="flex-direction:column;align-items:flex-start">
-        <div style="display:flex;align-items:center;width:100%">
-          <span class="pred-rank">#${i+1}</span>
-          <span class="pred-cand cand ${cc}" style="color:${isJp?'var(--gold)':isZonk?'var(--accent2)':'var(--text)'}">${cand}</span>
-          ${_srcBadgeHtml(ps.candidateSources&&ps.candidateSources[i])}
-          ${scoreLine}
-          ${isConsensus?'<span class="badge-consensus">🤝 KONSENSUS</span>':''}
-          <span style="margin-left:auto" class="${isJp?'badge-jp':isZonk?'badge-zonk':'badge-pending'}">${isJp?'🏆 JP':isZonk?'💀 ZONK':'PENDING'}</span>
-        </div>
-        ${rawLine}
-      </div>`;
-    });
-    html+='</div>';
-  }
-
-  // Tampilkan riwayat result yang sudah masuk (N/10)
-  if(ps.results.length>0){
-    html+=`<div style="background:var(--panel2);border:1px solid var(--border);border-radius:8px;padding:10px 12px;margin-bottom:10px">
-      <div style="font-size:8px;color:var(--dim);letter-spacing:2px;margin-bottom:6px">RESULT YANG SUDAH MASUK (${ps.results.length}/${PRED_RESULT_LIMIT})</div>`;
-    ps.results.forEach((r,i)=>{
-      html+=`<div style="display:flex;align-items:center;justify-content:space-between;padding:4px 0;border-bottom:1px solid rgba(255,255,255,0.03)">
-        <span style="font-size:9px;color:var(--dim)">#${i+1}</span>
-        <span class="cand ${cc}" style="font-size:13px">${r.val}</span>
-        <span class="${r.isJp?'badge-jp':'badge-zonk'}">${r.isJp?'🏆 JP':'💀 ZONK'}</span>
-      </div>`;
-    });
-    html+='</div>';
-  }
-
-  if(ps.candidates.length>0&&!allDone){
-    html+=`<div class="result-box"><div class="result-title">✦ MASUKKAN RESULT AKTUAL (${resultCount+1}/${PRED_RESULT_LIMIT})</div>
-      <div class="result-input-row">
-        <input class="result-input" id="resInp${n}" maxlength="${n}" placeholder="${'X'.repeat(n)}" oninput="this.value=this.value.toUpperCase().replace(/[^A-H]/g,'')" onkeydown="if(event.key==='Enter')submitResult(${n})">
-        <button class="btn-submit-result" onclick="submitResult(${n})">CEK</button>
-      </div>
-      <div class="result-msg" id="resMsgPred${n}"></div>
-    </div>`;
-  }
   html+=renderPosCandPanel(n);
   html+=renderHistTable(n);
   setHTML('pred-sub-'+n,html);
@@ -7841,128 +7794,16 @@ function renderPred(n){
 //    V2 sendiri (histStateV2, terpisah dari histState Batch 1)
 // ============================================================
 function renderPredV2(n){
-  const today=todayStr();
-  const ps=predStateV2[n];
-  if(!ps.results)ps.results=[];
-  const resultCount=ps.results.length;
-  const locked=ps.date===today&&ps.candidates.length>0&&resultCount<PRED_RESULT_LIMIT;
-  const allDone=resultCount>=PRED_RESULT_LIMIT;
+  // 2026-08-30 (permintaan user, ACC): sama seperti renderPred(n) -- gen-box
+  // lama/backdate/daftar-15-kandidat/result-manual dihapus dari tampilan,
+  // fungsi lama (generatePredV2/submitResultV2/backdate dkk) TIDAK dihapus
+  // fisik. Engine tetap _computePredSlotCandidatesAsOfV2 (PRED V2).
+  _syncHistStateFromSlotLogV2(n);
   const cc='c'+n;
   let html='';
-
-  html+=`<div class="gen-box">
-    <div class="uni-date-row" style="margin-bottom:10px">
-      <label class="uni-date-label" for="predV2Date${n}">📅 Tanggal prediksi</label>
-      <input type="date" class="uni-date-input" id="predV2Date${n}" value="${todayISO()}" max="${todayISO()}" oninput="predDateChangedV2(${n})">
-      <span class="uni-date-hint" id="predV2DateHint${n}"></span>
-    </div>
-    <button class="btn-generate" id="btnGenV2${n}" onclick="handleGeneratePredV2(${n})" ${locked?'disabled':''}>
-      ${locked?`✓ PREDIKSI TERKUNCI`:'⚡ GENERATE PREDIKSI (15 KANDIDAT)'}
-    </button>
-    ${locked&&!allDone?`<div class="locked-notice">Terkunci. Submit result aktual (<span style="color:var(--gold);font-weight:700">${resultCount}/${PRED_RESULT_LIMIT}</span> dilakukan) — generate baru terbuka setelah ${PRED_RESULT_LIMIT}x.</div>`:''}
-    ${allDone?`<div class="locked-notice" style="color:var(--green);border-color:rgba(0,230,118,0.3);background:rgba(0,230,118,0.05)">✓ Limit ${PRED_RESULT_LIMIT}x tercapai. Generate baru tersedia.</div>`:''}
-  </div>`;
   html+=renderPredRawInputPanel('v2',n);
-
-  const bp=backdatePredV2[n];
-  if(bp){
-    html+=`<div class="gen-box" style="border-color:var(--gold);background:rgba(255,193,7,0.06)">
-      <div class="gen-date">📅 PREDIKSI TANGGAL LAMPAU: <span>${isoToDisplay(bp.date)}</span></div>
-      <div style="font-family:'Orbitron',monospace;font-size:8px;letter-spacing:3px;color:var(--gold);margin:8px 0">${bp.candidates.length} KANDIDAT (untuk ${isoToDisplay(bp.date)}) — hasil analisa data historis (Batch 2 engine), bukan acak</div>
-      <div class="pred-list">${bp.candidates.map((cand,i)=>`<div class="pred-item"><span class="pred-rank">#${i+1}</span><span class="pred-cand cand ${cc}">${cand}</span>${_srcBadgeHtml(bp.candidateSources&&bp.candidateSources[i])}<span class="badge-pending">MENUNGGU RESULT</span></div>`).join('')}</div>
-      <div class="result-box" style="margin-top:10px">
-        <div class="result-title">✦ MASUKKAN RESULT AKTUAL UNTUK ${isoToDisplay(bp.date)}</div>
-        ${bp.suggestedResults&&bp.suggestedResults.length?`<div style="font-size:8px;color:var(--gold);margin-bottom:6px">📌 Ditemukan ${bp.suggestedResults.length} entri result aktual di data historis tanggal ini — tap yang sesuai:</div>
-        <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px">${bp.suggestedResults.map(e=>`<button class="btn btn-undo" style="padding:5px 10px;font-size:11px;border-color:var(--gold);color:var(--gold);display:flex;flex-direction:column;align-items:center;line-height:1.3" onclick="_autoRecordBackdateResultV2(${n},'${e.v}')"><span>${e.v}</span><span style="font-size:7px;color:var(--dim)">${e.session||''}${e.slot?' · slot'+e.slot:''}</span></button>`).join('')}</div>`:''}
-        <div class="result-input-row">
-          <input class="result-input" id="backdateResV2Inp${n}" maxlength="${n}" placeholder="${'X'.repeat(n)} atau ZONK" oninput="this.value=this.value.toUpperCase().replace(/[^A-Z]/g,'')" onkeydown="if(event.key==='Enter')submitBackdateResultV2(${n})">
-          <button class="btn-submit-result" onclick="submitBackdateResultV2(${n})">SIMPAN</button>
-        </div>
-        <div style="font-size:8px;color:var(--dim);margin-top:6px">Tulis ZONK kalau tidak ada kandidat yang cocok — tetap tercatat sebagai riwayat, tidak masuk data historis.</div>
-        <button class="btn btn-undo" style="margin-top:8px;width:100%" onclick="cancelBackdatePredV2(${n})">✕ Batalkan</button>
-        <div class="result-msg" id="backdateResV2Msg${n}"></div>
-      </div>
-    </div>`;
-  }
-
   html+=_renderPredPerSlotTodayV2(n,cc);
   html+=_renderPredPerSlotFullHistoryV2(n,cc);
-
-  if(ps.candidates.length>0){
-    const lastResult=ps.results.length?ps.results[ps.results.length-1]:null;
-    let comboLookup={};
-    try{
-      const full=scoreCandidatesBatch2(n,ALL[n].length);
-      const scores=full.map(c=>c.score);
-      const mn=Math.min(...scores),mx=Math.max(...scores);
-      full.forEach(c=>{comboLookup[c.cand]={...c,pct:mx>mn?Math.round((c.score-mn)/(mx-mn)*100):50};});
-    }catch(e){}
-    const draftToday=(rawDraft&&rawDraft.date===todayISO())?rawDraft.vals:null;
-    const consensus=getConsensusSetV2(n);
-    html+=`<div style="font-family:'Orbitron',monospace;font-size:8px;letter-spacing:3px;color:var(--gold);margin-bottom:8px">15 KANDIDAT PREDIKSI (BATCH 2 — per-posisi) — hasil analisa data historis, bukan acak</div>`;
-    if(draftToday){
-      html+=`<div style="font-size:8px;color:var(--green);margin-bottom:6px">🔢 Data mentah hari ini sudah masuk — kandidat di bawah dicocokkan ke digit mentahnya (per slot), jadi bukan tebakan buta.</div>`;
-    }
-    if(consensus.aiCount>0){
-      html+=`<div style="font-size:8px;color:var(--gold);margin-bottom:6px">🤝 ${consensus.overlap.length} dari ${consensus.aiCount} kandidat AI PRED juga nongol di sini — ditandai border emas (konsensus dua metode independen).</div>`;
-    }
-    html+='<div class="pred-list">';
-    ps.candidates.forEach((cand,i)=>{
-      const isJp=ps.status[i]==='jp',isZonk=ps.status[i]==='zonk';
-      const isConsensus=consensus.overlapSet.has(cand);
-      const sc=comboLookup[cand];
-      const scoreLine=sc?`<span style="font-size:8px;color:var(--dim);margin-left:4px">Skor ${sc.pct}%</span>`:'';
-      let rawLine='';
-      if(draftToday){
-        const proj=[];
-        HARIAN_SESSIONS.forEach(sess=>{
-          for(let slot=1;slot<=sess.slots;slot++){
-            const rd=draftToday[sess.key]&&draftToday[sess.key][slot];
-            if(rd&&rd.length===8){
-              const digits=candidateDigitsFromRaw(cand,rd);
-              if(digits)proj.push(`${sess.label}·S${slot}→${digits}`);
-            }
-          }
-        });
-        if(proj.length)rawLine=`<div style="font-size:8px;color:var(--purple);margin-top:2px">${proj.join(' · ')}</div>`;
-      }
-      html+=`<div class="pred-item ${isJp?'jp':isZonk?'zonk':''}${isConsensus?' consensus':''}" style="flex-direction:column;align-items:flex-start">
-        <div style="display:flex;align-items:center;width:100%">
-          <span class="pred-rank">#${i+1}</span>
-          <span class="pred-cand cand ${cc}" style="color:${isJp?'var(--gold)':isZonk?'var(--accent2)':'var(--text)'}">${cand}</span>
-          ${_srcBadgeHtml(ps.candidateSources&&ps.candidateSources[i])}
-          ${scoreLine}
-          ${isConsensus?'<span class="badge-consensus">🤝 KONSENSUS</span>':''}
-          <span style="margin-left:auto" class="${isJp?'badge-jp':isZonk?'badge-zonk':'badge-pending'}">${isJp?'🏆 JP':isZonk?'💀 ZONK':'PENDING'}</span>
-        </div>
-        ${rawLine}
-      </div>`;
-    });
-    html+='</div>';
-  }
-
-  if(ps.results.length>0){
-    html+=`<div style="background:var(--panel2);border:1px solid var(--border);border-radius:8px;padding:10px 12px;margin-bottom:10px">
-      <div style="font-size:8px;color:var(--dim);letter-spacing:2px;margin-bottom:6px">RESULT YANG SUDAH MASUK (${ps.results.length}/${PRED_RESULT_LIMIT})</div>`;
-    ps.results.forEach((r,i)=>{
-      html+=`<div style="display:flex;align-items:center;justify-content:space-between;padding:4px 0;border-bottom:1px solid rgba(255,255,255,0.03)">
-        <span style="font-size:9px;color:var(--dim)">#${i+1}</span>
-        <span class="cand ${cc}" style="font-size:13px">${r.val}</span>
-        <span class="${r.isJp?'badge-jp':'badge-zonk'}">${r.isJp?'🏆 JP':'💀 ZONK'}</span>
-      </div>`;
-    });
-    html+='</div>';
-  }
-
-  if(ps.candidates.length>0&&!allDone){
-    html+=`<div class="result-box"><div class="result-title">✦ MASUKKAN RESULT AKTUAL (${resultCount+1}/${PRED_RESULT_LIMIT})</div>
-      <div class="result-input-row">
-        <input class="result-input" id="resV2Inp${n}" maxlength="${n}" placeholder="${'X'.repeat(n)}" oninput="this.value=this.value.toUpperCase().replace(/[^A-H]/g,'')" onkeydown="if(event.key==='Enter')submitResultV2(${n})">
-        <button class="btn-submit-result" onclick="submitResultV2(${n})">CEK</button>
-      </div>
-      <div class="result-msg" id="resMsgPredV2${n}"></div>
-    </div>`;
-  }
   html+=renderPosCandPanel(n);
   html+=renderHistTableV2(n);
   setHTML('predv2-sub-'+n,html);
@@ -10100,6 +9941,58 @@ function _computePredSlotCandidatesAsOf(n,asOfDateISO){
   return{candidates,candidateSources,candidatesTier2,candidateSourcesTier2};
 }
 
+// 2026-08-30 (permintaan user): tab EVAL & renderHistTable(V2) dulu cuma
+// dapat data baru lewat submitResult(V2) manual (tombol yg sekarang dihapus
+// dari tampilan PRED). Supaya tetap dapat data baru tanpa generate/isi
+// manual lagi, sinkronkan otomatis dari predSlotLog(V2)[n] -- entry yg
+// result-nya sudah keisi (actualResult/crossResult) & belum tercatat (by
+// srcKey=tanggal|sesi|slot) di-push ke histState(V2)[n]. Idempoten, aman
+// dipanggil berkali-kali (submitHarian & tiap render tab PRED).
+function _syncHistStateFromSlotLog(n){
+  try{
+    if(!predSlotLog[n])predSlotLog[n]=loadPredSlotLog(n);
+    const all=predSlotLog[n];
+    if(!all||!all.length)return;
+    if(!histState[n])histState[n]=[];
+    const existing=new Set(histState[n].filter(h=>h.srcKey).map(h=>h.srcKey));
+    let added=false;
+    all.forEach(e=>{
+      const result=e.actualResult||e.crossResult;
+      if(!result)return;
+      const key=e.dateISO+'|'+e.sessKey+'|'+(e.slot||1);
+      if(existing.has(key))return;
+      const jp=!!(e.isJp||e.isCrossJp);
+      const sessDef=HARIAN_SESSIONS.find(s=>s.key===e.sessKey);
+      histState[n].push({date:e.dateISO,candidates:[...(e.candidates||[])],result,jp,engineVersion:'predslot-v1',srcKey:key,session:sessDef?sessDef.label:e.sessKey,slot:e.slot||1});
+      existing.add(key);
+      added=true;
+    });
+    if(added)saveHistState(n);
+  }catch(err){}
+}
+function _syncHistStateFromSlotLogV2(n){
+  try{
+    if(!predSlotLogV2[n])predSlotLogV2[n]=loadPredSlotLogV2(n);
+    const all=predSlotLogV2[n];
+    if(!all||!all.length)return;
+    if(!histStateV2[n])histStateV2[n]=[];
+    const existing=new Set(histStateV2[n].filter(h=>h.srcKey).map(h=>h.srcKey));
+    let added=false;
+    all.forEach(e=>{
+      const result=e.actualResult||e.crossResult;
+      if(!result)return;
+      const key=e.dateISO+'|'+e.sessKey+'|'+(e.slot||1);
+      if(existing.has(key))return;
+      const jp=!!(e.isJp||e.isCrossJp);
+      const sessDef=HARIAN_SESSIONS.find(s=>s.key===e.sessKey);
+      histStateV2[n].push({date:e.dateISO,candidates:[...(e.candidates||[])],result,jp,engineVersion:'predslot-v2',srcKey:key,session:sessDef?sessDef.label:e.sessKey,slot:e.slot||1});
+      existing.add(key);
+      added=true;
+    });
+    if(added)saveHistStateV2(n);
+  }catch(err){}
+}
+
 // Dipanggil dari _harianAutoPredOnRawInput begitu 1 slot raw lengkap.
 // Idempotent: tidak bikin entri dobel utk (dateISO,sessKey,slot) yg sama.
 function _autoGeneratePredSlotEntry(dateISO,sessKey,slot,n,raw){
@@ -10304,9 +10197,20 @@ function _computeCandidateHitAudit(entry,actualResultLetters){
   const m4=reslen===4?findMatch(entry.cand4):{rank:null,source:null};
   const m3=reslen===3?findMatch(entry.cand3):{rank:null,source:null};
   const m2=reslen===2?findMatch(entry.cand2):{rank:null,source:null};
+  // 2026-08-30 (permintaan user): tambah cek KEMBAR -- cuma relevan kalau
+  // result-nya memang pola kembar asli (4 huruf, ada yg berulang; cand4
+  // di atas TIDAK PERNAH berisi huruf berulang krn ALL[4] memang pool
+  // huruf unik, jadi kedua cek ini exclusive, tidak pernah tabrakan).
+  let mKmb={rank:null,source:null,type:null};
+  if(reslen===4&&kmbDetectType(actualResultLetters)){
+    const list=entry.kembar||[];
+    const idx=list.findIndex(k=>k.letters===actualResultLetters);
+    if(idx>=0)mKmb={rank:idx+1,source:list[idx].source||'core',type:list[idx].type||null};
+  }
   return{
     cand4Rank:m4.rank,cand3Rank:m3.rank,cand2Rank:m2.rank,
-    cand4Source:m4.source,cand3Source:m3.source,cand2Source:m2.source
+    cand4Source:m4.source,cand3Source:m3.source,cand2Source:m2.source,
+    kmbRank:mKmb.rank,kmbSource:mKmb.source,kmbType:mKmb.type
   };
 }
 // Request 2026-08: dipanggil begitu result untuk raw+sesi+slot ini disimpan
@@ -10667,7 +10571,7 @@ function backfillMissingArchives(){
       if(!r.predSnapshot){
         try{
           const pred=computeSlotPredLocal(r.raw,r.date);
-          r.predSnapshot={cand4:(pred.cand4||[]).slice(0,10),cand3:(pred.cand3||[]).slice(0,10),cand2:(pred.cand2||[]).slice(0,10),kembar:(pred.kembar||[]).slice(0,12),engineVersion:pred.engineVersion||'harian-raw-aware-v2'};
+          r.predSnapshot={cand4:(pred.cand4||[]).slice(0,15),cand3:(pred.cand3||[]).slice(0,15),cand2:(pred.cand2||[]).slice(0,15),kembar:(pred.kembar||[]).slice(0,15),engineVersion:pred.engineVersion||'harian-predv1-v1'};
           filledPredSnapshot++;
         }catch(e){}
       }
